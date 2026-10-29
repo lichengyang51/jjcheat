@@ -49,8 +49,22 @@ final class AppModel: ObservableObject {
     @Published var fromSq = -1
     @Published var toSq = -1
     @Published var sideText = "红方"
-    /// 对方刚走的那一步（中文），用于浮窗提示
     @Published var opponentMove = ""
+
+    /// 我执红还是执黑（"red" / "black"）。JJ象棋 红先走。
+    @Published var mySide: String = "red" {
+        didSet {
+            UserDefaults.standard.set(mySide, forKey: Self.mySideKey)
+            refreshHUD()
+        }
+    }
+    /// 当前是不是轮到我走
+    @Published var isMyTurn: Bool = false
+
+    /// 浮窗上的校准状态
+    @Published var calibState: HUDCalibState = .idle
+    private var calibDeadline: Date?
+    private let calibTimeout: TimeInterval = 6.0
 
     // 流程状态
     @Published var calibrated = false
@@ -112,14 +126,37 @@ final class AppModel: ObservableObject {
 
     private let cornersKey = "JJCheat.corners"
     private let learnedKey = "JJCheat.learned"
+    static let mySideKey = "JJCheat.mySide"
 
     private func loadCalibration() {
+        if let s = UserDefaults.standard.string(forKey: Self.mySideKey), !s.isEmpty {
+            mySide = s
+        }
         if let saved = UserDefaults.standard.array(forKey: cornersKey) as? [[Double]], saved.count == 4 {
             JJEngine.shared.setCorners(saved)
             calibrated = true
             learned = UserDefaults.standard.bool(forKey: learnedKey)
-            status = learned ? "已就绪，点「③ 打开画中画」" : "标定已存，请进一局新棋后点「重新学习棋盘」"
+            calibState = .success
+            status = learned ? "已就绪" : "标定已存，等开局画面"
         }
+    }
+
+    /// 开始一次校准：限时 6 秒，成功或超时就结束，不会无限重试
+    func startCalibration() {
+        if calibState == .detecting { return }
+        calibState = .detecting
+        calibDeadline = Date().addingTimeInterval(calibTimeout)
+        status = "正在校准…请让整个棋盘完整出现在画面里"
+        refreshHUD()
+    }
+
+    func resetCalibration() {
+        calibrated = false
+        learned = false
+        calibState = .idle
+        calibDeadline = nil
+        UserDefaults.standard.set(false, forKey: learnedKey)
+        refreshHUD()
     }
 
     func applyCalibration(_ pts: [[Double]]) {
@@ -253,20 +290,31 @@ final class AppModel: ObservableObject {
         }
 
         // ============================================================
-        // ★ 全自动校准：不需要用户点任何按钮
-        //   你在 JJ象棋 界面时，帧照样一直传回来，
-        //   后台每 8 帧尝试检测一次棋盘，检测到就自动标定。
+        // ★ 校准状态机（限时，不会无限重试）
+        //   用户在 JJ象棋 界面点浮窗上的「校准」按钮触发，
+        //   6 秒内每帧尝试检测棋盘，成功或超时就结束。
         // ============================================================
-        if !calibrated && receivedFrames % 8 == 0 {
+        if calibState == .detecting {
             if let c = JJEngine.shared.autoDetectBoard(pixels: frame.data,
                                                        width: frame.width,
                                                        height: frame.height),
                Self.cornersSane(c, w: frame.width, h: frame.height) {
                 applyCalibration(c)
+                calibState = .success
+                calibDeadline = nil
                 let cw = (c[1][0] - c[0][0]) / 8
-                let ch = (c[3][1] - c[0][1]) / 9
-                status = String(format: "✅ 已自动识别棋盘位置（格宽 %.1f px）", cw)
-                NSLog("[JJCheat] 自动校准成功 %.1f x %.1f", cw, ch)
+                status = String(format: "✅ 校准成功（格宽 %.1f px）· 现在可以下棋了", cw)
+                NSLog("[JJCheat] 校准成功 %.1f", cw)
+                // 成功就不 return，继续往下走学习流程
+            } else if let dl = calibDeadline, Date() > dl {
+                calibState = .failed
+                calibDeadline = nil
+                status = "❌ 6 秒内没找到棋盘。请让整个棋盘完整可见，再点一次「重试」"
+                refreshHUD()
+                return
+            } else {
+                refreshHUD()
+                return
             }
         }
 
@@ -331,25 +379,34 @@ final class AppModel: ObservableObject {
 
     private func consume(_ res: [String: Any], cost: Int) {
         if JJEngine.bool(res, "detectFail") {
-            status = "识别偏差 \(JJEngine.int(res, "detectDiff")) 格，建议重新标定"
+            status = "识别偏差 \(JJEngine.int(res, "detectDiff")) 格"
             refreshHUD()
             return
         }
         fen = JJEngine.str(res, "fen", fen)
-        moveText = JJEngine.str(res, "suggestChinese")
         scoreText = JJEngine.str(res, "scoreText")
         winrate = JJEngine.double(res, "winrate", 50)
         depth = JJEngine.int(res, "depth")
         fromSq = JJEngine.int(res, "from", -1)
         toSq = JJEngine.int(res, "to", -1)
-        sideText = JJEngine.str(res, "sideToMove") == "red" ? "红方" : "黑方"
+
+        let sideToMove = JJEngine.str(res, "sideToMove", "red")
+        sideText = (sideToMove == "red") ? "红方" : "黑方"
+        isMyTurn = (sideToMove == mySide)
+
+        // 轮到我方才显示建议；对方回合只提示「等对方走」
+        if isMyTurn {
+            moveText = JJEngine.str(res, "suggestChinese")
+        } else {
+            moveText = ""
+        }
 
         detail = "\(sideText)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
 
         if JJEngine.bool(res, "moveDetected") {
             let mv = JJEngine.str(res, "moveChinese", JJEngine.str(res, "move"))
             opponentMove = mv
-            status = "对方走了 \(mv) · 建议 \(moveText)"
+            status = isMyTurn ? "对方走了 \(mv) · 建议 \(moveText)" : "对方走了 \(mv)"
         }
 
         refreshHUD()
@@ -357,17 +414,29 @@ final class AppModel: ObservableObject {
 
     // MARK: - 画中画内容
 
-    /// 浮窗主文字：没校准时显示状态，有招时显示着法
+    /// 浮窗主文字
     private var hudMainText: String {
-        if !calibrated { return "未校准" }
-        if !learned { return "等开局" }
+        switch calibState {
+        case .detecting: return "校准中…"
+        case .failed: return "校准失败"
+        default: break
+        }
+        if !calibrated { return "点校准" }
+        if !learned { return "学习中…" }
+        if !isMyTurn { return "等对方走" }
         if moveText.isEmpty { return "识别中…" }
         return moveText
     }
 
     private var hudHint: String {
-        if !calibrated { return "回 App 点「点我校准」" }
-        if !learned { return "开一局新棋让它学棋盘" }
+        switch calibState {
+        case .detecting: return "正在画面里找棋盘…"
+        case .failed: return "点右上角「重试」再校准一次"
+        default: break
+        }
+        if !calibrated { return "点右上角「校准」按钮" }
+        if !learned { return "请停在标准开局画面" }
+        if !isMyTurn { return "对方回合" }
         if !opponentMove.isEmpty { return "对方刚走 \(opponentMove)" }
         return ""
     }
@@ -375,20 +444,25 @@ final class AppModel: ObservableObject {
     /// 把当前状态推到浮窗
     func refreshHUD() {
         guard PiPController.shared.isActive else { return }
-        PiPController.shared.update(PiPController.Content(
+        PiPController.shared.update(
             moveText: hudMainText,
             scoreText: scoreText,
             winrate: winrate,
             depth: depth,
             sideText: sideText,
             hintText: hudHint,
-            hasMove: calibrated && learned && !moveText.isEmpty
-        ))
+            hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
+            calibState: calibState
+        )
     }
 
     // MARK: - 画中画
 
     func startPiP(sourceView: UIView) {
+        // 浮窗上的「校准」按钮 → 触发限时校准
+        PiPController.shared.onCalibrateTap = { [weak self] in
+            self?.startCalibration()
+        }
         refreshHUD()
         PiPController.shared.onStateChange = { [weak self] active, err in
             guard let self else { return }
@@ -396,7 +470,7 @@ final class AppModel: ObservableObject {
             if let err {
                 self.status = "画中画失败：\(err)"
             } else if active {
-                self.status = "浮窗已开 · 现在切回 JJ象棋"
+                self.status = "浮窗已开 · 点浮窗上的「校准」按钮就能校准"
             }
         }
         PiPController.shared.start(sourceView: sourceView)

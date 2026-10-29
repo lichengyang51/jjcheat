@@ -82,24 +82,27 @@ final class PiPController: NSObject {
 
     // MARK: - 更新内容
 
-    struct Content {
-        var moveText: String
-        var scoreText: String
-        var winrate: Double
-        var depth: Int
-        var sideText: String
-        var hintText: String
-        var hasMove: Bool
+    /// 浮窗上的「校准」按钮被点击时回调（用户在 JJ象棋 界面里就能触发）
+    var onCalibrateTap: (() -> Void)? {
+        didSet { hudView.onCalibrateTap = onCalibrateTap }
     }
 
-    func update(_ c: Content) {
-        hudView.moveText = c.moveText
-        hudView.scoreText = c.scoreText
-        hudView.winrate = c.winrate
-        hudView.depth = c.depth
-        hudView.sideText = c.sideText
-        hudView.hintText = c.hintText
-        hudView.hasMove = c.hasMove
+    func update(moveText: String,
+                scoreText: String,
+                winrate: Double,
+                depth: Int,
+                sideText: String,
+                hintText: String,
+                hasMove: Bool,
+                calibState: HUDCalibState) {
+        hudView.moveText = moveText
+        hudView.scoreText = scoreText
+        hudView.winrate = winrate
+        hudView.depth = depth
+        hudView.sideText = sideText
+        hudView.hintText = hintText
+        hudView.hasMove = hasMove
+        hudView.calibState = calibState
     }
 
     // MARK: - 音频会话

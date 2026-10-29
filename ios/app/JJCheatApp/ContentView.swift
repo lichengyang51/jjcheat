@@ -97,21 +97,33 @@ struct ContentView: View {
                         )
                     }
 
-                    stepCard(num: "②", title: "校准棋盘（全自动）",
-                             desc: "开着录屏切到 JJ象棋，程序会在后台自动认出棋盘位置，你什么都不用点。等状态变成「已自动识别棋盘位置」就成功了") {
+                    stepCard(num: "②", title: "打开画中画",
+                             desc: "浮窗会飘在 JJ象棋 上面。打开后切到 JJ象棋，点浮窗右上角的「校准」按钮就能校准，不用回这个 App") {
                         Button {
-                            let r = model.autoCalibrate()
-                            alertText = r.message
-                            showAlert = true
+                            model.startPiP(sourceView: anchorView)
                         } label: {
-                            Label("立即检测一次（可选）", systemImage: "wand.and.stars")
+                            Label(model.pipActive ? "浮窗已启动" : "打开画中画",
+                                  systemImage: "pip")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
-                                .background(Color.green.opacity(0.85))
+                                .background(model.pipActive ? Color.green.opacity(0.85)
+                                                            : Color.purple.opacity(0.85))
                                 .foregroundColor(.white)
                                 .cornerRadius(10)
                         }
+                    }
 
+                    stepCard(num: "③", title: "我执红还是执黑",
+                             desc: "JJ象棋 红先走。设置对了才知道该你走还是该等对方") {
+                        Picker("我执", selection: $model.mySide) {
+                            Text("我执红（先走）").tag("red")
+                            Text("我执黑（后走）").tag("black")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    stepCard(num: "④", title: "兜底：手动校准",
+                             desc: "浮窗上的自动校准失败时才用这个。在录屏画面上点棋盘最外圈 4 个交叉点") {
                         Button {
                             if let blocker = model.calibrationBlocker() {
                                 alertText = blocker
@@ -126,7 +138,7 @@ struct ContentView: View {
                             }
                             showCalibration = true
                         } label: {
-                            Label("手动校准（兜底）", systemImage: "viewfinder")
+                            Label("手动校准", systemImage: "viewfinder")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                                 .background(Color.blue.opacity(0.85))
@@ -135,27 +147,11 @@ struct ContentView: View {
                         }
 
                         if model.calibrated {
-                            Button("重新学习棋盘（画面停在标准开局时点）") {
-                                model.forceRelearn()
+                            Button("重置校准状态") {
+                                model.resetCalibration()
                             }
                             .font(.footnote)
                             .padding(.top, 4)
-                        }
-                    }
-
-                    stepCard(num: "③", title: "打开画中画浮窗",
-                             desc: "浮窗飘在 JJ象棋 上面，可拖动、可双指缩放。拖到棋盘位置放大，就等于给棋盘加了标注") {
-                        Button {
-                            model.startPiP(sourceView: anchorView)
-                        } label: {
-                            Label(model.pipActive ? "浮窗已启动" : "打开画中画",
-                                  systemImage: "pip")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(model.pipActive ? Color.green.opacity(0.85)
-                                                            : Color.purple.opacity(0.85))
-                                .foregroundColor(.white)
-                                .cornerRadius(10)
                         }
                     }
 
