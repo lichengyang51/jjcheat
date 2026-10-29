@@ -148,6 +148,25 @@ struct CalibrationView: View {
                         }
                         .stroke(Color.green, lineWidth: 2)
                     }
+
+                    // ---- 四个点都点完后：立刻画出识别网格，和棋盘线条对不对得上，一眼就知道 ----
+                    if points.count == 4 {
+                        Canvas { ctx, size in
+                            drawGridPreview(ctx: &ctx, imageSize: img.size, box: size)
+                        }
+                        .allowsHitTesting(false)
+                        .overlay(alignment: .bottom) {
+                            Text(previewHint)
+                                .font(.caption2.bold())
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(verdictGood ? Color.green.opacity(0.85)
+                                                        : Color.red.opacity(0.85))
+                                .cornerRadius(8)
+                                .padding(.bottom, 6)
+                        }
+                    }
                 } else {
                     Text("没有可用画面").foregroundColor(.gray)
                 }
@@ -197,6 +216,85 @@ struct CalibrationView: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 24)
         .padding(.top, 8)
+    }
+
+    // MARK: - 网格预览
+
+    /// 四点围成的四边形内，按 9 竖 10 横插值画出网格 + 90 个采样点
+    private func drawGridPreview(ctx: inout GraphicsContext, imageSize: CGSize, box: CGSize) {
+        guard points.count == 4 else { return }
+        let r = fittedRect(imageSize: imageSize, box: box)
+        guard r.width > 0 else { return }
+
+        // 四点从图像像素坐标转成视图坐标
+        var vp: [CGPoint] = []
+        for p in points {
+            vp.append(CGPoint(x: r.minX + p.x / imageSize.width * r.width,
+                              y: r.minY + p.y / imageSize.height * r.height))
+        }
+
+        func at(_ u: Double, _ v: Double) -> CGPoint {
+            let a = (1 - u) * (1 - v), b = u * (1 - v), c = u * v, d = (1 - u) * v
+            return CGPoint(x: a * vp[0].x + b * vp[1].x + c * vp[2].x + d * vp[3].x,
+                           y: a * vp[0].y + b * vp[1].y + c * vp[2].y + d * vp[3].y)
+        }
+
+        // 9 条竖线
+        for c in 0...8 {
+            var path = Path()
+            let u = Double(c) / 8.0
+            path.move(to: at(u, 0))
+            for rr in 1...9 { path.addLine(to: at(u, Double(rr) / 9.0)) }
+            ctx.stroke(path, with: .color(.green.opacity(0.85)), lineWidth: 1.2)
+        }
+        // 10 条横线
+        for rr in 0...9 {
+            var path = Path()
+            let v = Double(rr) / 9.0
+            path.move(to: at(0, v))
+            for cc in 1...8 { path.addLine(to: at(Double(cc) / 8.0, v)) }
+            ctx.stroke(path, with: .color(.green.opacity(0.85)), lineWidth: 1.2)
+        }
+        // 90 个采样点
+        for rr in 0...9 {
+            for cc in 0...8 {
+                let p = at(Double(cc) / 8.0, Double(rr) / 9.0)
+                let dot = Path(ellipseIn: CGRect(x: p.x - 2.2, y: p.y - 2.2, width: 4.4, height: 4.4))
+                ctx.fill(dot, with: .color(.yellow))
+            }
+        }
+        // 四个角高亮
+        for (i, p) in vp.enumerated() {
+            let ring = Path(ellipseIn: CGRect(x: p.x - 9, y: p.y - 9, width: 18, height: 18))
+            ctx.stroke(ring, with: .color(.white), lineWidth: 2)
+            _ = i
+        }
+    }
+
+    /// 四边形是否像个正经棋盘（用边长比例做粗判）
+    private var verdictGood: Bool {
+        guard points.count == 4 else { return false }
+        // 校验：四个点应该构成一个明显「竖长」的四边形，且不能太扁、不能自交
+        let p0 = points[0], p1 = points[1], p2 = points[2], p3 = points[3]
+        let topW = hypot(p1.x - p0.x, p1.y - p0.y)
+        let bottomW = hypot(p2.x - p3.x, p2.y - p3.y)
+        let leftH = hypot(p3.x - p0.x, p3.y - p0.y)
+        let rightH = hypot(p2.x - p1.x, p2.y - p1.y)
+        guard topW > 20, bottomW > 20, leftH > 20, rightH > 20 else { return false }
+        // 上下宽度差异 < 35%，左右高度差异 < 35%
+        let wRatio = min(topW, bottomW) / max(topW, bottomW)
+        let hRatio = min(leftH, rightH) / max(leftH, rightH)
+        if wRatio < 0.65 || hRatio < 0.65 { return false }
+        // 中国象棋棋盘：高 / 宽 ≈ 9 / 8 = 1.125
+        let aspect = ((leftH + rightH) / 2) / ((topW + bottomW) / 2)
+        return aspect > 0.85 && aspect < 1.45
+    }
+
+    private var previewHint: String {
+        if verdictGood {
+            return "绿线和棋盘线条重合就点「完成」"
+        }
+        return "形状不对 · 请撤销重点（必须点棋格最外圈的交叉点）"
     }
 
     // MARK: - 坐标换算
