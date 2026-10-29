@@ -550,24 +550,30 @@ class BoardRecognizer {
 
   /**
    * 模板匹配版三分类
+   * 同时返回 codes（具体兵种编码 0-14），用于区分棋盘朝向
    */
   classifyByTemplate(stats) {
     const grid = new Int8Array(90);
+    const codes = new Int8Array(90);
     const conf = new Float32Array(90);
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
-      if (!s || !s.patchW) { grid[sq] = EMPTY; continue; }
+      if (!s || !s.patchW) { grid[sq] = EMPTY; codes[sq] = 0; continue; }
       const r = this.matchCell(s);
       conf[sq] = r.score;
       if (r.key === 'E') {
         grid[sq] = EMPTY;
+        codes[sq] = 0;
       } else {
         const code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
-        if (!code || code === 0) grid[sq] = EMPTY;
-        else grid[sq] = (code < 8) ? RED_PC : BLK_PC;
+        if (!code || code === 0) { grid[sq] = EMPTY; codes[sq] = 0; }
+        else {
+          codes[sq] = code;
+          grid[sq] = (code < 8) ? RED_PC : BLK_PC;
+        }
       }
     }
-    return { grid, conf };
+    return { grid, conf, codes };
   }
 
   /**

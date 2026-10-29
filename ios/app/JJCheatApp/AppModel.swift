@@ -51,20 +51,15 @@ final class AppModel: ObservableObject {
     @Published var sideText = "红方"
     @Published var opponentMove = ""
 
-    /// 我执红还是执黑（"red" / "black"）。JJ象棋 红先走。
-    @Published var mySide: String = "red" {
-        didSet {
-            UserDefaults.standard.set(mySide, forKey: Self.mySideKey)
-            refreshHUD()
-        }
-    }
+    /// 我执红还是执黑（自动识别，不需要用户选）
+    @Published var mySide: String = "red"
     /// 当前是不是轮到我走
     @Published var isMyTurn: Bool = false
+    /// 浮窗状态：0 灰未就绪 / 1 蓝校准中 / 2 绿就绪 / 3 红失败
+    @Published var statusKind: Int = 0
 
-    /// 浮窗上的校准状态
-    @Published var calibState: HUDCalibState = .idle
-    private var calibDeadline: Date?
-    private let calibTimeout: TimeInterval = 6.0
+    private var autoCalibAttempts = 0
+    private let autoCalibGiveUp = 40      // 约 5 秒还找不到就报失败
 
     // 流程状态
     @Published var calibrated = false
@@ -129,33 +124,21 @@ final class AppModel: ObservableObject {
     static let mySideKey = "JJCheat.mySide"
 
     private func loadCalibration() {
-        if let saved = UserDefaults.standard.array(forKey: cornersKey) as? [[Double]], saved.count == 4 {
-            JJEngine.shared.setCorners(saved)
-            calibrated = true
-            learned = UserDefaults.standard.bool(forKey: learnedKey)
-            // 注意：这里不要把 calibState 设成 .success。
-            // 只要设了，一开 App 浮窗就显示「成功」且按钮点不动，
-            // 用户根本没法重新校准。保持 .idle，按钮显示「重校准」。
-            calibState = .idle
-            status = learned ? "已就绪（可点浮窗按钮重新校准）" : "标定已存，等开局画面"
-        }
-    }
-
-    /// 开始一次校准：限时 6 秒，成功或超时就结束，不会无限重试
-    func startCalibration() {
-        if calibState == .detecting { return }
-        calibState = .detecting
-        calibDeadline = Date().addingTimeInterval(calibTimeout)
-        status = "正在校准…请让整个棋盘完整出现在画面里"
-        refreshHUD()
+        // 不恢复旧的四点：棋盘位置可能已经变了，而且旧数据可能是错的。
+        // 每次启动都重新自动检测一遍（几秒内完成），比带着错误数据跑强。
+        calibrated = false
+        learned = false
+        statusKind = 0
+        status = "正在自动找棋盘…切到 JJ象棋 并让整个棋盘完整显示"
     }
 
     func resetCalibration() {
         calibrated = false
         learned = false
-        calibState = .idle
-        calibDeadline = nil
+        statusKind = 0
+        autoCalibAttempts = 0
         UserDefaults.standard.set(false, forKey: learnedKey)
+        UserDefaults.standard.removeObject(forKey: cornersKey)
         refreshHUD()
     }
 
@@ -290,37 +273,34 @@ final class AppModel: ObservableObject {
         }
 
         // ============================================================
-        // ★ 校准状态机（限时，不会无限重试）
-        //   用户在 JJ象棋 界面点浮窗上的「校准」按钮触发，
-        //   6 秒内每帧尝试检测棋盘，成功或超时就结束。
+        // ★ 全自动校准：用户什么都不用点
+        //   他在 JJ象棋 里时帧一直传回来，后台每 3 次尝试找一次棋盘。
+        //   找到就立刻标定，然后自动进入学模板 / 算棋。
         // ============================================================
-        if calibState == .detecting {
-            if let c = JJEngine.shared.autoDetectBoard(pixels: frame.data,
-                                                       width: frame.width,
-                                                       height: frame.height),
-               Self.cornersSane(c, w: frame.width, h: frame.height) {
-                applyCalibration(c)
-                calibState = .success
-                calibDeadline = nil
-                let cw = (c[1][0] - c[0][0]) / 8
-                status = String(format: "✅ 校准成功（格宽 %.1f px）· 现在可以下棋了", cw)
-                NSLog("[JJCheat] 校准成功 %.1f", cw)
-                // 成功就不 return，继续往下走学习流程
-            } else if let dl = calibDeadline, Date() > dl {
-                calibState = .failed
-                calibDeadline = nil
-                status = "❌ 6 秒内没找到棋盘。请让整个棋盘完整可见，再点一次「重试」"
-                refreshHUD()
-                return
-            } else {
-                refreshHUD()
+        if !calibrated {
+            autoCalibAttempts += 1
+            if autoCalibAttempts % 3 == 0 {
+                if let c = JJEngine.shared.autoDetectBoard(pixels: frame.data,
+                                                           width: frame.width,
+                                                           height: frame.height),
+                   Self.cornersSane(c, w: frame.width, h: frame.height) {
+                    applyCalibration(c)
+                    let cw = (c[1][0] - c[0][0]) / 8
+                    statusKind = 1
+                    status = String(format: "✅ 已自动找到棋盘（格宽 %.1f px），正在学棋子…", cw)
+                    NSLog("[JJCheat] 自动校准成功 %.1f", cw)
+                    autoCalibAttempts = 0
+                } else if autoCalibAttempts > autoCalibGiveUp {
+                    statusKind = 3
+                    status = "没找到棋盘：请让整个棋盘完整出现在画面里（别被裁掉边）"
+                    refreshHUD()
+                    return
+                }
+            }
+            if !calibrated {
+                if receivedFrames % 10 == 0 { refreshHUD() }
                 return
             }
-        }
-
-        guard calibrated else {
-            if receivedFrames % 15 == 0 { refreshHUD() }
-            return
         }
         guard !busy else { return }
         busy = true
@@ -426,34 +406,38 @@ final class AppModel: ObservableObject {
 
     /// 浮窗主文字
     private var hudMainText: String {
-        switch calibState {
-        case .detecting: return "校准中…"
-        case .failed: return "校准失败"
-        default: break
+        if !calibrated {
+            return statusKind == 3 ? "没找到棋盘" : "找棋盘中…"
         }
-        if !calibrated { return "点校准" }
-        if !learned { return "学习中…" }
+        if !learned { return "学棋子中…" }
         if !isMyTurn { return "等对方走" }
         if moveText.isEmpty { return "识别中…" }
         return moveText
     }
 
     private var hudHint: String {
-        switch calibState {
-        case .detecting: return "正在画面里找棋盘…"
-        case .failed: return "点右上角「重试」再校准一次"
-        default: break
+        if !calibrated {
+            if statusKind == 3 { return "让整个棋盘完整出现在画面里" }
+            return "切到 JJ象棋，等几秒自动识别"
         }
-        if !calibrated { return "点右上角「校准」按钮" }
         if !learned { return "请停在标准开局画面" }
         if !isMyTurn { return "对方回合 · 你执\(mySide == "red" ? "红" : "黑")" }
-        if !opponentMove.isEmpty { return "对方刚走 \(opponentMove)" }
+        if !opponentMove.isEmpty { return "对方刚走 \(opponentMove) · 你执\(mySide == "red" ? "红" : "黑")" }
         return "你执\(mySide == "red" ? "红" : "黑")"
     }
 
     /// 把当前状态推到浮窗
     func refreshHUD() {
         guard PiPController.shared.isActive else { return }
+        // 状态色：就绪且轮到我 → 绿；找棋盘/学棋子中 → 蓝；失败 → 红；其它 → 灰
+        var kind = 0
+        if statusKind == 3 {
+            kind = 3
+        } else if !calibrated || !learned {
+            kind = 1
+        } else {
+            kind = 2
+        }
         PiPController.shared.update(
             moveText: hudMainText,
             scoreText: scoreText,
@@ -462,18 +446,13 @@ final class AppModel: ObservableObject {
             sideText: sideText,
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
-            calibState: calibState,
-            isCalibrated: calibrated
+            statusKind: kind
         )
     }
 
     // MARK: - 画中画
 
     func startPiP(sourceView: UIView) {
-        // 浮窗上的「校准」按钮 → 触发限时校准
-        PiPController.shared.onCalibrateTap = { [weak self] in
-            self?.startCalibration()
-        }
         refreshHUD()
         PiPController.shared.onStateChange = { [weak self] active, err in
             guard let self else { return }
@@ -481,7 +460,7 @@ final class AppModel: ObservableObject {
             if let err {
                 self.status = "画中画失败：\(err)"
             } else if active {
-                self.status = "浮窗已开 · 点浮窗上的「校准」按钮就能校准"
+                self.status = "浮窗已开 · 切到 JJ象棋，程序会自己找棋盘"
             }
         }
         PiPController.shared.start(sourceView: sourceView)

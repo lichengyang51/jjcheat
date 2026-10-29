@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T12:20:55.394Z
+ *  生成时间: 2026-10-29T12:29:40.960Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1998,24 +1998,30 @@ class BoardRecognizer {
 
   /**
    * 模板匹配版三分类
+   * 同时返回 codes（具体兵种编码 0-14），用于区分棋盘朝向
    */
   classifyByTemplate(stats) {
     const grid = new Int8Array(90);
+    const codes = new Int8Array(90);
     const conf = new Float32Array(90);
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
-      if (!s || !s.patchW) { grid[sq] = EMPTY; continue; }
+      if (!s || !s.patchW) { grid[sq] = EMPTY; codes[sq] = 0; continue; }
       const r = this.matchCell(s);
       conf[sq] = r.score;
       if (r.key === 'E') {
         grid[sq] = EMPTY;
+        codes[sq] = 0;
       } else {
         const code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
-        if (!code || code === 0) grid[sq] = EMPTY;
-        else grid[sq] = (code < 8) ? RED_PC : BLK_PC;
+        if (!code || code === 0) { grid[sq] = EMPTY; codes[sq] = 0; }
+        else {
+          codes[sq] = code;
+          grid[sq] = (code < 8) ? RED_PC : BLK_PC;
+        }
       }
     }
-    return { grid, conf };
+    return { grid, conf, codes };
   }
 
   /**
@@ -2383,6 +2389,16 @@ function flipGrid(grid) {
   return out;
 }
 
+/** 上下翻转一张兵种编码表 */
+function flipCodes(codes) {
+  var out = new Int8Array(90);
+  for (var sq = 0; sq < 90; sq++) {
+    var r = (sq / 9) | 0, c = sq % 9;
+    out[(9 - r) * 9 + c] = codes[sq];
+  }
+  return out;
+}
+
 /**
  * 全局会话状态（单例）
  */
@@ -2419,51 +2435,50 @@ var JJEngine = {
     return session.tracker.fen;
   },
 
-  /** 在开局局面状态下学习棋盘背景（必须画面正好是开局） */
+  /** 在开局局面状态下学习棋盘背景 */
   learnBoard: function (pixels, w, h) {
     if (!session.recognizer) throw new Error('未标定');
 
     var stats = session.recognizer.sampleAll(pixels, w, h, true);
-
-    // ---- 先判断画面朝向：row 9（最下面一排）是红子还是黑子 ----
-    // 用户执红 → 红在下；执黑 → JJ象棋 翻转棋盘，黑在下。
-    var colorCls = null;
-    try { colorCls = session.recognizer.classifyByColor(stats); } catch (e) { colorCls = null; }
-    var bRed = 0, bBlack = 0;
-    if (colorCls) {
-      for (var c = 0; c < 9; c++) {
-        var v = colorCls.grid[9 * 9 + c];
-        if (v === 1) bRed++;
-        else if (v === 2) bBlack++;
-      }
-    }
-    session.flipped = (bBlack > bRed);
-
-    // 根据朝向选择棋子位置表（模板标签必须和画面对应）
-    var pieceMap = TRK.startPieceMap();
-    if (session.flipped) pieceMap = flipPieceMap(pieceMap);
-
     session.recognizer.learnBackground(stats, []);
-    session.recognizer.learnTemplates(stats, pieceMap);
 
-    // ---- 学完立刻用学到的模型识别同一帧，验证画面到底是不是开局 ----
-    var verifyDiff = -1;
-    var ok = false;
-    try {
-      var cls = session.recognizer.classify(stats);
-      var gotGrid = session.flipped ? flipGrid(cls.grid) : cls.grid;
-      var expectedPos = new POS.Position(C.START_FEN);
-      var expected = TRK.boardToGrid(expectedPos.board);
+    var startMap = TRK.startPieceMap();
+    var expectedBoard = startMap;   // 标准开局的兵种编码表
+
+    function compare(a, b) {
       var d = 0;
-      for (var i = 0; i < 90; i++) {
-        if (gotGrid[i] !== expected[i]) d++;
-      }
-      verifyDiff = d;
-      ok = (d <= 3);
-    } catch (e) {
-      verifyDiff = -2;
-      ok = false;
+      for (var i = 0; i < 90; i++) if (a[i] !== b[i]) d++;
+      return d;
     }
+
+    // ★ 朝向判定（关键：不能「学的时候翻一次、验的时候再翻回来」，那样自己抵消）
+    //   做法：用两套标签各学一次模板，各自直接和标准开局的兵种表比对。
+    //     标签 = 标准布局（红在下）  → 若画面确实是红在下，误差小
+    //     标签 = 翻转布局（黑在下）  → 若画面其实是黑在下，误差小
+    //   标签和画面匹配的那一套，误差必然更小。
+
+    // A：假定画面是标准朝向（红在下）
+    session.flipped = false;
+    session.recognizer.learnTemplates(stats, startMap);
+    var clsA = session.recognizer.classify(stats);
+    var diffNormal = (clsA && clsA.codes) ? compare(clsA.codes, expectedBoard) : 999;
+
+    // B：假定画面是翻转朝向（黑在下）
+    session.recognizer.learnTemplates(stats, flipPieceMap(startMap));
+    var clsB = session.recognizer.classify(stats);
+    var diffFlipped = (clsB && clsB.codes) ? compare(clsB.codes, expectedBoard) : 999;
+
+    var verifyDiff;
+    if (diffFlipped < diffNormal) {
+      session.flipped = true;
+      session.recognizer.learnTemplates(stats, flipPieceMap(startMap));
+      verifyDiff = diffFlipped;
+    } else {
+      session.flipped = false;
+      session.recognizer.learnTemplates(stats, startMap);
+      verifyDiff = diffNormal;
+    }
+    var ok = (verifyDiff <= 6);
 
     var learned = session.recognizer.bgModel ? 1 : 0;
     var warmTh = session.recognizer.bgModel ? session.recognizer.bgModel.warmThreshold : -1;
@@ -2477,8 +2492,8 @@ var JJEngine = {
       isOpening: ok,
       flipped: session.flipped ? 1 : 0,
       mySide: session.flipped ? 'black' : 'red',
-      bottomRed: bRed,
-      bottomBlack: bBlack
+      diffNormal: diffNormal,
+      diffFlipped: diffFlipped
     };
   },
 

@@ -82,11 +82,7 @@ final class PiPController: NSObject {
 
     // MARK: - 更新内容
 
-    /// 浮窗上的「校准」按钮被点击时回调（用户在 JJ象棋 界面里就能触发）
-    var onCalibrateTap: (() -> Void)? {
-        didSet { hudView.onCalibrateTap = onCalibrateTap }
-    }
-
+    /// statusKind: 0 灰未就绪 / 1 蓝校准中 / 2 绿就绪 / 3 红失败
     func update(moveText: String,
                 scoreText: String,
                 winrate: Double,
@@ -94,8 +90,7 @@ final class PiPController: NSObject {
                 sideText: String,
                 hintText: String,
                 hasMove: Bool,
-                calibState: HUDCalibState,
-                isCalibrated: Bool) {
+                statusKind: Int) {
         hudView.moveText = moveText
         hudView.scoreText = scoreText
         hudView.winrate = winrate
@@ -103,8 +98,7 @@ final class PiPController: NSObject {
         hudView.sideText = sideText
         hudView.hintText = hintText
         hudView.hasMove = hasMove
-        hudView.calibState = calibState
-        hudView.isCalibrated = isCalibrated
+        hudView.statusKind = statusKind
     }
 
     // MARK: - 音频会话

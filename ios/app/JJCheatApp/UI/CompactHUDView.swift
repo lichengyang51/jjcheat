@@ -2,28 +2,15 @@
 //  CompactHUDView.swift
 //  JJCheatApp —— 画中画浮窗内容
 //
-//  这个浮窗有两个作用：
-//    1. 显示「该走哪一步」和「局势如何」
-//    2. ★ 提供一个可点击的「校准」按钮 —— 用户人在 JJ象棋 里，
-//       回不到 App，所以校准入口必须长在浮窗上
+//  【重要】这个浮窗只负责「显示」，不承担任何点击。
+//  iOS 的 PiP 窗口点击任意位置都会唤回宿主 App（系统写死的行为），
+//  所以「在浮窗上放校准按钮」这条路从原理上走不通。
 //
-//  浮窗布局（300×118）：
-//    ┌──────────────────────────────┐
-//    │ 炮二平五          [校准]     │  ← 着法 + 可点按钮
-//    │ +1.35  红方胜 68%  深11       │
-//    │ 对方刚走 马八进七             │
-//    │ ████████████░░░░░░░          │
-//    └──────────────────────────────┘
+//  校准全部在后台自动完成：用户在 JJ象棋 里的时候，帧一直传回来，
+//  App 自己找棋盘、判朝向、学模板、算棋，用户只管看字。
 //
 
 import UIKit
-
-enum HUDCalibState {
-    case idle          // 未校准，显示「校准」按钮
-    case detecting     // 正在校准（限时）
-    case success       // 校准成功
-    case failed        // 校准失败
-}
 
 final class CompactHUDView: UIView {
 
@@ -34,55 +21,41 @@ final class CompactHUDView: UIView {
     var sideText: String = "" { didSet { setNeedsDisplay() } }
     var hintText: String = "" { didSet { setNeedsDisplay() } }
     var hasMove: Bool = false { didSet { setNeedsDisplay() } }
-    var calibState: HUDCalibState = .idle { didSet { setNeedsDisplay() } }
-    /// 是否已经校准过（决定按钮显示「校准」还是「重校准」）
-    var isCalibrated: Bool = false { didSet { setNeedsDisplay() } }
-
-    /// 点击「校准」按钮的回调
-    var onCalibrateTap: (() -> Void)?
+    /// 状态色：0 灰（未就绪）1 蓝（校准中）2 绿（就绪）3 红（失败）
+    var statusKind: Int = 0 { didSet { setNeedsDisplay() } }
 
     static let buildTag: String = {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
     }()
-
-    private var calibButtonRect: CGRect {
-        let bw: CGFloat = 52, bh: CGFloat = 26
-        return CGRect(x: bounds.width - bw - 8, y: 8, width: bw, height: bh)
-    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = true
         contentMode = .redraw
-        isUserInteractionEnabled = true
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        addGestureRecognizer(tap)
+        isUserInteractionEnabled = false      // 明确不吃触摸
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func handleTap(_ g: UITapGestureRecognizer) {
-        let p = g.location(in: self)
-        // 只要不在「校准中」，随时可点（成功状态也能点 = 重新校准）
-        if calibState == .detecting { return }
-        if calibButtonRect.insetBy(dx: -10, dy: -8).contains(p) {
-            onCalibrateTap?()
-        }
-    }
-
     override func draw(_ rect: CGRect) {
         let w = bounds.width, h = bounds.height
 
-        // 背景
         let bg = UIBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), cornerRadius: 12)
         UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 0.95).setFill()
         bg.fill()
 
-        // 左侧色带
+        // 左侧状态色带
+        let stripeColor: UIColor = {
+            switch statusKind {
+            case 1: return UIColor(red: 0.20, green: 0.60, blue: 1.0, alpha: 1)
+            case 2: return UIColor(red: 0.15, green: 0.80, blue: 0.35, alpha: 1)
+            case 3: return UIColor(red: 1.0, green: 0.30, blue: 0.25, alpha: 1)
+            default: return UIColor(red: 0.45, green: 0.45, blue: 0.50, alpha: 1)
+            }
+        }()
         let stripe = UIBezierPath(roundedRect: CGRect(x: 0, y: 8, width: 4, height: h - 16), cornerRadius: 2)
-        (hasMove ? UIColor(red: 1.0, green: 0.28, blue: 0.22, alpha: 1)
-                 : UIColor(red: 0.45, green: 0.45, blue: 0.50, alpha: 1)).setFill()
+        stripeColor.setFill()
         stripe.fill()
 
         // 主文字
@@ -92,15 +65,15 @@ final class CompactHUDView: UIView {
             .font: UIFont.systemFont(ofSize: mainSize, weight: .heavy),
             .foregroundColor: hasMove
                 ? UIColor(red: 1.0, green: 0.93, blue: 0.42, alpha: 1)
-                : UIColor(red: 0.72, green: 0.74, blue: 0.80, alpha: 1)
+                : UIColor(red: 0.80, green: 0.82, blue: 0.88, alpha: 1)
         ]
         let mainStr = main as NSString
         let mainSz = mainStr.size(withAttributes: mainAttrs)
-        mainStr.draw(at: CGPoint(x: 14, y: mainSize * 0.24), withAttributes: mainAttrs)
+        mainStr.draw(at: CGPoint(x: 14, y: mainSize * 0.20), withAttributes: mainAttrs)
 
-        // 副信息（分值 / 胜率 / 深度），靠右但给按钮留位置
+        // 副信息
         var parts: [String] = []
-        if !scoreText.isEmpty { parts.append(scoreText) }
+        if !scoreText.isEmpty && hasMove { parts.append(scoreText) }
         if !sideText.isEmpty && hasMove {
             parts.append("\(sideText)胜 \(String(format: "%.0f%%", winrate))")
         }
@@ -112,16 +85,16 @@ final class CompactHUDView: UIView {
             ]
             let sub = parts.joined(separator: "  ") as NSString
             let subSz = sub.size(withAttributes: subAttrs)
-            sub.draw(at: CGPoint(x: w - subSz.width - 12, y: h * 0.46), withAttributes: subAttrs)
+            sub.draw(at: CGPoint(x: w - subSz.width - 12, y: h * 0.22), withAttributes: subAttrs)
         }
 
         // 提示行
         if !hintText.isEmpty {
             let hintAttrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: max(9, h * 0.105), weight: .regular),
-                .foregroundColor: UIColor(red: 0.55, green: 0.57, blue: 0.62, alpha: 1)
+                .foregroundColor: UIColor(red: 0.58, green: 0.60, blue: 0.66, alpha: 1)
             ]
-            (hintText as NSString).draw(at: CGPoint(x: 14, y: mainSize * 0.24 + mainSz.height - 1),
+            (hintText as NSString).draw(at: CGPoint(x: 14, y: mainSize * 0.20 + mainSz.height - 2),
                                         withAttributes: hintAttrs)
         }
 
@@ -142,9 +115,6 @@ final class CompactHUDView: UIView {
             fill.fill()
         }
 
-        // ★ 校准按钮
-        drawCalibButton()
-
         // 构建标记
         let tagAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.monospacedDigitSystemFont(ofSize: max(8, h * 0.085), weight: .regular),
@@ -153,35 +123,5 @@ final class CompactHUDView: UIView {
         let tag = Self.buildTag as NSString
         let tagSz = tag.size(withAttributes: tagAttrs)
         tag.draw(at: CGPoint(x: w - tagSz.width - 10, y: h - tagSz.height - 15), withAttributes: tagAttrs)
-    }
-
-    private func drawCalibButton() {
-        let r = calibButtonRect
-        let path = UIBezierPath(roundedRect: r, cornerRadius: 13)
-
-        let (bgColor, title, textColor): (UIColor, String, UIColor) = {
-            switch calibState {
-            case .idle:
-                if isCalibrated {
-                    return (UIColor(red: 0.28, green: 0.36, blue: 0.55, alpha: 0.95), "重校准", .white)
-                }
-                return (UIColor(red: 0.15, green: 0.55, blue: 0.95, alpha: 0.95), "校准", .white)
-            case .detecting:
-                return (UIColor(red: 0.90, green: 0.60, blue: 0.10, alpha: 0.95), "校准中", .white)
-            case .success:
-                return (UIColor(red: 0.12, green: 0.66, blue: 0.28, alpha: 0.95), "✓成功", .white)
-            case .failed:
-                return (UIColor(red: 0.80, green: 0.22, blue: 0.20, alpha: 0.95), "重试", .white)
-            }
-        }()
-
-        bgColor.setFill()
-        path.fill()
-
-        let font = UIFont.systemFont(ofSize: max(11, bounds.height * 0.135), weight: .semibold)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
-        let s = title as NSString
-        let sz = s.size(withAttributes: attrs)
-        s.draw(at: CGPoint(x: r.midX - sz.width / 2, y: r.midY - sz.height / 2), withAttributes: attrs)
     }
 }
