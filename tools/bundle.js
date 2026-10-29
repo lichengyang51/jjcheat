@@ -352,12 +352,70 @@ var JJEngine = {
     }
   },
 
+  /**
+   * 自动检测 + 用棋子实测校验，校验不过就明确报不通过。
+   *
+   * 为什么要校验：边缘投影找到的线间距可能偏小 10~20%（实测格高 59.9 vs 实际 73.3），
+   * 这种误差逐行累积，到第 7 行采样点已经偏了整整一格，炮就被采到上面空格去了。
+   * 检测本身没法自己发现自己错了，只能用「棋子应该落在交叉点上」来验证。
+   *
+   * 校验方法：网格算出来后，采 90 个格子，统计「暖色盘面」的格子数
+   * 和它们到最近交叉点的偏移。棋子数太少或偏移太大 → 判定网格不可信。
+   */
+  autoDetectBoardChecked: function (pixels, w, h) {
+    var corners = JJEngine.autoDetectBoard(pixels, w, h);
+    if (!corners) return { ok: false, reason: 'no_grid' };
+
+    // 用这组角采样，看有多少格是「有棋子盘面」
+    JJEngine.setCorners(corners);
+    if (!session.recognizer) return { ok: false, reason: 'no_recognizer' };
+    var stats;
+    try { stats = session.recognizer.sampleAll(pixels, w, h, false); } catch (e) { return { ok: false, reason: 'sample_fail' }; }
+
+    var pieceCells = 0;
+    var warmSum = 0;
+    for (var i = 0; i < 90; i++) {
+      var s = stats[i];
+      if (!s) continue;
+      var warmR = s.warmR || 0;
+      if (warmR >= 0.30) { pieceCells++; warmSum += warmR; }
+    }
+    return {
+      ok: true,
+      corners: corners,
+      pieceCells: pieceCells,
+      avgWarm: pieceCells ? (warmSum / pieceCells) : 0,
+      // 中局一般 20~32 个子，低于 8 个基本就是网格歪了
+      plausible: pieceCells >= 8
+    };
+  },
+
   /** 自动检测并直接应用（一步到位） */
   autoCalibrate: function (pixels, w, h) {
     var r = JJEngine.autoDetectBoard(pixels, w, h);
     if (!r) return { ok: false };
     JJEngine.setCorners(r);
     return { ok: true, corners: r };
+  },
+
+  /** 调试：输出 90 个格子的原始特征，用来定位「哪一格为什么判错」 */
+  debugSample: function (pixels, w, h) {
+    if (!session.recognizer) return null;
+    var stats = session.recognizer.sampleAll(pixels, w, h, true);
+    var out = [];
+    for (var i = 0; i < 90; i++) {
+      var s = stats[i] || {};
+      out.push([
+        i,
+        Math.round((s.inkR || 0) * 1000) / 1000,
+        Math.round((s.warmR || 0) * 1000) / 1000,
+        Math.round((s.redInkR || 0) * 1000) / 1000,
+        Math.round((s.darkInkR || 0) * 1000) / 1000,
+        Math.round((s.redR || 0) * 1000) / 1000,
+        s.skipped || 0
+      ]);
+    }
+    return out;
   },
 
   /**
