@@ -310,12 +310,6 @@ final class AppModel: ObservableObject {
                 return
             }
         }
-        // 每 3 帧更新一次浮窗里的棋盘画面（够顺滑，又不浪费 CPU）
-        cropTick += 1
-        if cropTick % 3 == 1, let img = makeBoardCrop(frame) {
-            boardCrop = img
-        }
-
         guard !busy else { return }
         busy = true
 
@@ -473,7 +467,7 @@ final class AppModel: ObservableObject {
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
             statusKind: kind,
             fen: fen,
-            boardImage: boardCrop
+            boardImage: nil
         )
     }
 

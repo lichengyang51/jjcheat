@@ -314,34 +314,14 @@ final class ChessHUDView: UIView {
     ///
     /// 【为什么不再自己重画】
     ///   以前这里是按识别结果重绘的棋盘，识别错一格浮窗就错一格，
-    ///   而且兵种/红黑会逐帧抖动，看着就是「位置对、字全错」。
-    ///   现在直接贴抓屏裁出来的真实画面 —— 永远跟你屏幕上一模一样，
-    ///   跟识别准不准完全无关。
-    let boardImageView: UIImageView = {
-        let v = UIImageView()
-        v.contentMode = .scaleAspectFit
-        v.clipsToBounds = true
-        v.backgroundColor = UIColor(red: 0.12, green: 0.13, blue: 0.15, alpha: 1)
-        v.isUserInteractionEnabled = false
-        return v
-    }()
-
-    /// 裁屏失败时的兜底（放一个占位提示）
-    private let boardPlaceholder: UILabel = {
-        let l = UILabel()
-        l.text = "等待画面…"
-        l.font = UIFont.systemFont(ofSize: 10)
-        l.textColor = UIColor(white: 0.55, alpha: 1)
-        l.textAlignment = .center
-        return l
-    }()
+    /// 浮窗里的棋盘 = 按识别结果绘制的盘面（不是录屏截图）
+    let boardView = BoardGridView(frame: .zero)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 1)
         isUserInteractionEnabled = false
-        addSubview(boardImageView)
-        addSubview(boardPlaceholder)
+        addSubview(boardView)
         addSubview(textView)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -351,8 +331,7 @@ final class ChessHUDView: UIView {
         let h = bounds.height
         // 棋盘区取整个高度（棋盘本身是 8:9，剩下左右留一点白）
         let boardSide = min(h, bounds.width * 0.60)
-        boardImageView.frame = CGRect(x: 0, y: 0, width: boardSide, height: h)
-        boardPlaceholder.frame = CGRect(x: 0, y: h / 2 - 8, width: boardSide, height: 16)
+        boardView.frame = CGRect(x: 0, y: 0, width: boardSide, height: h)
         textView.frame = CGRect(x: boardSide, y: 0, width: max(1, bounds.width - boardSide), height: h)
     }
 
@@ -367,11 +346,9 @@ final class ChessHUDView: UIView {
         textView.hintText = hintText
         textView.hasMove = hasMove
         textView.statusKind = statusKind
-        if let img = boardImage {
-            boardImageView.image = img
-            boardPlaceholder.isHidden = true
-        } else {
-            boardPlaceholder.isHidden = (boardImageView.image != nil)
-        }
+        // 浮窗里的棋盘 = 程序「认出来的」盘面（按屏幕方向画），
+        // 这样你拿它和真实棋盘一比就知道哪里认错了。
+        // （试过直接贴录屏截图，那样和真实棋盘永远一样、根本没有对照意义。）
+        boardView.fen = fen
     }
 }
