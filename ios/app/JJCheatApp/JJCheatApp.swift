@@ -2,6 +2,10 @@
 //  JJCheatApp.swift
 //  JJCheatApp —— 入口
 //
+//  注意：部署目标是 iOS 16，
+//  不能用 iOS 17 才有的 onChange(of:initial:_:)，
+//  生命周期统一交给 AppModel 里的 NotificationCenter 处理。
+//
 
 import SwiftUI
 import AVFoundation
@@ -9,8 +13,6 @@ import UIKit
 
 @main
 struct JJCheatApp: App {
-
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // 先把回环监听起起来，这样一开录屏 Extension 就能连上
@@ -28,17 +30,10 @@ struct JJCheatApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                AudioKeepAlive.shared.start()
-                FrameServer.shared.restart()
-            case .background:
-                AudioKeepAlive.shared.start()
-            default:
-                break
-            }
+                .onAppear {
+                    AudioKeepAlive.shared.start()
+                    FrameServer.shared.restart()
+                }
         }
     }
 }
