@@ -1716,6 +1716,49 @@ class BoardRecognizer {
       }
     }
 
+    // ---- 将/帅必在：整盘找不到某一方的将帅时，把它找回来 ----
+    //
+    // 用户实测的现象：黑将那个位置「有棋子、是黑的，但认成了炮」。
+    // 也就是说颜色和位置都对，只是兵种错（將 和 炮 字形都很密，容易混）。
+    // 但象棋里一方不可能没有将帅 —— 只要某一方将帅数为 0，
+    // 就说明有一个子被认成了别的兵种。这里把「将/帅在候选里排得最靠前」的那格改回来，
+    // 比让整盘缺将帅强得多（缺将帅的盘面引擎根本没法算）。
+    (function repairKings() {
+      for (let side = 0; side < 2; side++) {
+        const kingCode = side === 0 ? 1 : 8;      // 红帥 / 黑將
+        let kingCount = 0;
+        for (let sq = 0; sq < 90; sq++) if (codes[sq] === kingCode) kingCount++;
+        if (kingCount > 0) continue;
+
+        let bestSq = -1, bestRank = 99;
+        for (let sq = 0; sq < 90; sq++) {
+          const v = codes[sq];
+          if (!v) continue;
+          const isRed = v <= 7;
+          if ((side === 0) !== isRed) continue;      // 只在本方格子里找
+          if (v === kingCode) continue;
+          // 别的兵种数量还没超上限时，优先别动它（说明它自己可能是对的）
+          const ranked = rankedCodes[sq] || [];
+          const rank = ranked.indexOf(kingCode);
+          if (rank < 0) continue;
+          // 该兵种已经超上限的格子，最值得改
+          const t = isRed ? v : v - 7;
+          const overs = cnt[side][t] > LIMIT[t] ? 0 : 10;
+          const score = rank * 2 + overs;
+          if (score < bestRank) { bestRank = score; bestSq = sq; }
+        }
+        if (bestSq >= 0) {
+          const old = codes[bestSq];
+          const ot = old <= 7 ? old : old - 7;
+          if (cnt[side][ot] > 0) cnt[side][ot]--;
+          codes[bestSq] = kingCode;
+          cnt[side][1]++;
+          grid[bestSq] = side === 0 ? RED_PC : BLK_PC;
+          repaired++;
+        }
+      }
+    })();
+
     return { grid, conf, codes, tplFail, repaired: repaired, hidden: hidden, hiddenCount: hiddenCount };
   }
 

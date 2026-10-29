@@ -38,7 +38,8 @@ final class AppModel: ObservableObject {
     /// 最近若干帧的历史（校准用：切回 App 后最新帧是「JJCheat 自己」，
     /// 需要往回翻到刚才在 JJ象棋 里的那一帧）
     @Published var frameHistory: [FrameSnapshot] = []
-    private let historyLimit = 24
+    // 抓屏改成原生 882x1917 后每帧 6.8MB，历史帧留 24 张会吃掉 160MB+，收到 6 张
+    private let historyLimit = 6
 
     // 引擎输出
     @Published var fen = BoardRenderView.startFen

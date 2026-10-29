@@ -31,13 +31,20 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var convertedCount: UInt64 = 0
     private var failedCount: UInt64 = 0
 
-    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 6fps）
-    private let stride: UInt64 = 10
+    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 5fps）
+    ///   原生分辨率下每帧 6.8MB，帧率放低一点控制带宽和 CPU
+    private let stride: UInt64 = 12
     /// 心跳间隔
     private let heartbeatEvery: UInt64 = 5
-    /// 降采样倍数：ReplayKit 给的是 882×1917，降 2 倍得 441×958，
-    /// 棋盘每格约 49×95 像素，识别余量足够；降 3 倍只有 294×639 偏糊
-    private let downscale = 2
+    /// 降采样倍数。
+    ///   【这是「兵种认错」的病根】
+    ///   以前是 2（441×958）。YUV 420 的色度本来就是半分辨率，
+    ///   再降 2 倍后「红字/黑字」的色度细节只剩 1/4，字形被糊掉，
+    ///   于是位置对、颜色对，但子认错（实测：黑将被认成炮）。
+    ///   离线量化：不模糊 0 格错 / 轻微模糊 3 格错 / 中等模糊 20 格错。
+    ///   改成 1 = 原生 882×1917，色度的相对模糊度直接减半；
+    ///   引擎在 442/589/736 格距下都是 0 格错、884 只差 1 格，扛得住这个尺寸。
+    private let downscale = 1
 
     private var heartbeatTimer: DispatchSourceTimer?
     private let heartbeatQueue = DispatchQueue(label: "jjcheat.broadcast.heartbeat")
