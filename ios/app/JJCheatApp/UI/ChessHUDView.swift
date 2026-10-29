@@ -141,8 +141,6 @@ final class HUDTextView: UIView {
     var hintText: String = "" { didSet { setNeedsDisplay() } }
     var hasMove: Bool = false { didSet { setNeedsDisplay() } }
     var statusKind: Int = 0 { didSet { setNeedsDisplay() } }
-    /// 抓屏诊断：分辨率 + 该帧平均颜色（每 30 帧更新一次）
-    var diagText: String = "" { didSet { setNeedsDisplay() } }
 
     static let buildTag: String = {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
@@ -290,15 +288,6 @@ final class HUDTextView: UIView {
         let tagSz = tag.size(withAttributes: tagAttrs)
         tag.draw(at: CGPoint(x: w - tagSz.width - padX, y: barY - tagSz.height - 2),
                  withAttributes: tagAttrs)
-
-        if !diagText.isEmpty {
-            let dAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.monospacedDigitSystemFont(ofSize: 6.5, weight: .regular),
-                .foregroundColor: UIColor(red: 0.55, green: 0.45, blue: 0.30, alpha: 1)
-            ]
-            (diagText as NSString).draw(at: CGPoint(x: padX, y: barY - tagSz.height - 2),
-                                        withAttributes: dAttrs)
-        }
     }
 }
 
@@ -342,7 +331,7 @@ final class ChessHUDView: UIView {
 
     func apply(moveText: String, scoreText: String, winrate: Double, depth: Int,
                sideText: String, hintText: String, hasMove: Bool,
-               statusKind: Int, fen: String, diag: String = "") {
+               statusKind: Int, fen: String) {
         textView.moveText = moveText
         textView.scoreText = scoreText
         textView.winrate = winrate
@@ -352,6 +341,5 @@ final class ChessHUDView: UIView {
         textView.hasMove = hasMove
         textView.statusKind = statusKind
         boardView.fen = fen
-        textView.diagText = diag
     }
 }

@@ -98,8 +98,7 @@ final class PiPController: NSObject {
                 hintText: String,
                 hasMove: Bool,
                 statusKind: Int,
-                fen: String,
-                diag: String) {
+                fen: String) {
         hudView.apply(moveText: moveText,
                       scoreText: scoreText,
                       winrate: winrate,
@@ -108,8 +107,7 @@ final class PiPController: NSObject {
                       hintText: hintText,
                       hasMove: hasMove,
                       statusKind: statusKind,
-                      fen: fen,
-                      diag: diag)
+                      fen: fen)
     }
 
     // MARK: - 音频会话

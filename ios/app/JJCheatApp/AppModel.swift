@@ -62,10 +62,6 @@ final class AppModel: ObservableObject {
     ///  压住了那几格在抓屏里就是浮窗自己的米黄棋盘，识别必然错，必须先提醒拖开。
     @Published var pipOverlap: Bool = false
 
-    /// 抓屏诊断：分辨率 + 该帧稀疏采样得到的平均 RGB（每 30 帧算一次）
-    @Published var captureDiag: String = ""
-    private var diagTick = 0
-
     private var autoCalibAttempts = 0
     private let autoCalibGiveUp = 40      // 约 5 秒还找不到就报失败
 
@@ -310,9 +306,6 @@ final class AppModel: ObservableObject {
                 return
             }
         }
-        // 诊断采样放在 busy 判定之前，这样每帧都能统计到（不受丢帧影响）
-        updateCaptureDiag(frame)
-
         guard !busy else { return }
         busy = true
 
@@ -355,10 +348,12 @@ final class AppModel: ObservableObject {
         processQueue.async { [weak self] in
             guard let self else { return }
             let t0 = Date()
-            // 思考时长：这是唯一动过的「速度」参数。
-            //   局面更新需要「连续 2 帧识别结果一致」，而每帧都要先算完棋才会处理下一帧，
-            //   所以这个值直接决定了落子后要等多久：1800ms 时要等 3~4 秒，700ms 时 1.5 秒左右。
-            //   深度从 9 降到 7，对象棋着法质量影响很小，换来的响应快一倍多。
+            // ★ 唯一改动：思考时长 1800 → 700ms（1c09ac3 原值 1800）
+            //
+            // process() 是同步的，算棋期间拿不到新帧；而局面更新要求「连续 2 帧识别一致」，
+            // 所以落子后要等 2~3 次算棋才刷新：1800ms 时约 4 秒，700ms 时约 1.5 秒。
+            // 深度从 9 降到 7，对象棋着法质量影响很小。
+            // 除这个数字外，识别 / 抓屏 / 浮窗绘制 / 稳定判据全部保持 1c09ac3 原样。
             let res = JJEngine.shared.process(pixels: frame.data,
                                              width: frame.width,
                                              height: frame.height,
@@ -434,9 +429,9 @@ final class AppModel: ObservableObject {
     }
 
     private var hudHint: String {
-        // 「浮窗挡住棋盘」这条提示已经删掉。
-        //   它靠颜色猜浮窗位置，会误报；而且一旦误报还会连带把正常格子抹空、冻住局面，
-        //   结果是明明没挡也报、报了就用不了。浮窗本身已经改成横版小窗，不会碰到棋盘。
+        // 浮窗压住棋盘时必须先提示 —— 那几格在我们的抓屏里是看不见的，
+        // 越算越乱。让用户把浮窗拖开，是恢复识别的第一步。
+        if pipOverlap { return "浮窗挡棋盘，拖开它" }
         if !calibrated {
             if statusKind == 3 { return "让整个棋盘完整出现在画面里" }
             return "切到 JJ象棋，等几秒自动识别"
@@ -447,28 +442,6 @@ final class AppModel: ObservableObject {
     }
 
     /// 把当前状态推到浮窗
-    /// 稀疏采样算整帧平均色，用来判断抓屏的颜色转换是否正常
-    private func updateCaptureDiag(_ frame: FrameServer.Frame) {
-        diagTick += 1
-        guard diagTick % 30 == 1 else { return }
-        let n = frame.data.count / 4
-        guard n > 0 else { return }
-        var sr = 0, sg = 0, sb = 0, cnt = 0
-        var i = 0
-        let step = 37
-        frame.data.withUnsafeBytes { raw in
-            guard let p = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            while i < n {
-                sr += Int(p[i * 4]); sg += Int(p[i * 4 + 1]); sb += Int(p[i * 4 + 2])
-                cnt += 1
-                i += step
-            }
-        }
-        guard cnt > 0 else { return }
-        captureDiag = String(format: "%dx%d c=%d,%d,%d", frame.width, frame.height,
-                               sr / cnt, sg / cnt, sb / cnt)
-    }
-
     func refreshHUD() {
         guard PiPController.shared.isActive else { return }
         // 状态色：就绪 → 绿；找棋盘/学棋子中 → 蓝；失败 → 红；其它 → 灰
@@ -489,8 +462,7 @@ final class AppModel: ObservableObject {
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
             statusKind: kind,
-            fen: fen,
-            diag: captureDiag
+            fen: fen
         )
     }
 
