@@ -246,6 +246,10 @@ var JJEngine = {
     session.gridStable = 0;
     // 逐格「上一稳定值」也清掉，否则换局后残留上一局的棋子
     session.stableCodes = null;
+    session.lastBoardFen = '';
+    session.searchKey = '';
+    session.searchLevel = 0;
+    session.lastBudget = 0;
     session.lowStreak = null;
     session.lowConfCount = 0;
     return session.tracker.fen;
@@ -570,7 +574,7 @@ var JJEngine = {
       // 自己的画中画是否真的盖住了棋盘的格子。
       // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
       // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
-      pipOverlap: ((cls.hiddenCount || 0) >= 2) ? 1 : 0,
+      pipOverlap: ((cls.hiddenCount || 0) >= 3) ? 1 : 0,
       hiddenCells: (cls.hiddenCount || 0)
     };
 
@@ -597,14 +601,17 @@ var JJEngine = {
     }
     // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
-    var codesSettled = (session.codesStable >= 1);
+    var codesSettled = (session.codesStable >= 2);
 
     // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
     //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
     //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
     //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
     var firstLatch = !session.lastBoardFen;
-    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
+    // 有格子被自己的浮窗盖住时不更新局面 —— 残缺盘面算出来的着法一定是错的。
+    // 保留上一局面 + 在浮窗上提示把浮窗拖开，比给一个错着法好。
+    var occluded = ((cls.hiddenCount || 0) >= 3);
+    if (!occluded && (firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
       // 局面更新限流：最多每 350ms 换一次。（原来 700ms，落子后光这道闸就要多等半秒）
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
