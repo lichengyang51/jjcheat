@@ -51,6 +51,8 @@ jobs:
           grep -m1 objectVersion JJCheat.xcodeproj/project.pbxproj || true
           echo "--- schemes ---"
           ls -la JJCheat.xcodeproj/xcshareddata/xcschemes/ || true
+          echo "--- 确认 engine.js 在 pbxproj 里被引用 ---"
+          grep -c "engine.js" JJCheat.xcodeproj/project.pbxproj || true
 
       - name: 编译（免签名）
         run: |
@@ -73,13 +75,23 @@ jobs:
           APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name "JJCheatApp.app" -maxdepth 3 | head -1)
           echo "app = $APP"
           test -d "$APP"
+          echo "--- app 内容 ---"
+          ls -la "$APP"
+          echo "--- 硬性校验 ---"
+          test -f "$APP/engine.js"                       || (echo "!!! engine.js 没打进去" && exit 1)
+          test -f "$APP/Info.plist"                      || (echo "!!! 缺 Info.plist" && exit 1)
+          test -f "$APP/PlugIns/JJCheatBroadcast.appex/JJCheatBroadcast" || (echo "!!! 缺录屏扩展" && exit 1)
+          echo "engine.js  = $(wc -c < "$APP/engine.js") 字节"
+          echo "主程序     = $(wc -c < "$APP/JJCheatApp") 字节"
+          echo "扩展       = $(wc -c < "$APP/PlugIns/JJCheatBroadcast.appex/JJCheatBroadcast") 字节"
           cd "$RUNNER_TEMP"
           rm -rf Payload JJCheat-unsigned.ipa
           mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry JJCheat-unsigned.ipa Payload
           ls -la JJCheat-unsigned.ipa
-          unzip -l JJCheat-unsigned.ipa | head -30
+          echo "--- ipa 内容 ---"
+          unzip -l JJCheat-unsigned.ipa
 
       - name: 上传 ipa
         uses: actions/upload-artifact@v4

@@ -34,9 +34,11 @@ targets:
           - "Info.plist"
           - "*.entitlements"
           - "Resources/**"
-      - path: Shared
-    resources:
+      # engine.js 必须显式声明进 resources 构建阶段，
+      # 否则 Xcode 会把它当普通文件忽略，App 里就没有引擎脚本
       - path: JJCheatApp/Resources
+        buildPhase: resources
+      - path: Shared
     info:
       path: JJCheatApp/Info.plist
       properties:
