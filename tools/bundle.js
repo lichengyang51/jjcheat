@@ -197,6 +197,35 @@ var JJEngine = {
   },
 
   /**
+   * 自动检测棋盘四角
+   * 棋盘是严格等间距的 9 竖 10 横网格，用边缘投影 + 等距约束就能定位，
+   * 完全不需要用户手点。
+   * @returns {Array<[number,number]>|null} [[左上],[右上],[右下],[左下]]，检测失败返回 null
+   */
+  autoDetectBoard: function (pixels, w, h) {
+    try {
+      var r = REC.autoDetectBoard(pixels, w, h);
+      if (!r) return null;
+      return [
+        [r[0][0], r[0][1]],
+        [r[1][0], r[1][1]],
+        [r[2][0], r[2][1]],
+        [r[3][0], r[3][1]]
+      ];
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /** 自动检测并直接应用（一步到位） */
+  autoCalibrate: function (pixels, w, h) {
+    var r = JJEngine.autoDetectBoard(pixels, w, h);
+    if (!r) return { ok: false };
+    JJEngine.setCorners(r);
+    return { ok: true, corners: r };
+  },
+
+  /**
    * 主流程：喂一帧 RGBA 像素，返回识别 + 建议
    * @param {Uint8ClampedArray|Uint8Array} pixels RGBA
    * @param {number} w

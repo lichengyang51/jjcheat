@@ -93,6 +93,21 @@ final class JJEngine {
         }
     }
 
+    /// 自动检测棋盘四角（9 竖 10 横等距网格投影法）
+    /// 返回 [[左上],[右上],[右下],[左下]]，失败返回 nil
+    func autoDetectBoard(pixels: Data, width: Int, height: Int) -> [[Double]]? {
+        guard loadIfNeeded() else { return nil }
+        var out: [[Double]]?
+        queue.sync { () -> Void in
+            guard let arr = self.makeTypedArray(pixels, width: width, height: height) else { return }
+            guard let res = self.callEngine("autoDetectBoard", args: [arr, width, height]),
+                  !res.isNull, !res.isUndefined,
+                  let a = res.toArray() as? [[NSNumber]], a.count == 4 else { return }
+            out = a.map { [$0[0].doubleValue, $0[1].doubleValue] }
+        }
+        return out
+    }
+
     // MARK: - 学习棋盘
 
     func learnBoard(pixels: Data, width: Int, height: Int) -> [String: Any]? {

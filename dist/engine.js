@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T12:05:33.279Z
+ *  生成时间: 2026-10-29T12:06:37.759Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1508,7 +1508,155 @@ function applyH(H, x, y) {
   return [(H[0] * x + H[1] * y + H[2]) / w, (H[3] * x + H[4] * y + H[5]) / w];
 }
 
+/**
+ * 抛物线插值细化峰值位置（亚像素精度）
+ * 峰值 i 与左右两点做二次拟合，顶点偏移量就是亚像素修正量
+ */
+function refinePeak(profile, i) {
+  if (i <= 0 || i >= profile.length - 1) return i;
+  const a = profile[i - 1], b = profile[i], c = profile[i + 1];
+  const denom = a - 2 * b + c;
+  if (Math.abs(denom) < 1e-6) return i;
+  let delta = 0.5 * (a - c) / denom;
+  if (delta > 0.5) delta = 0.5;
+  if (delta < -0.5) delta = -0.5;
+  return i + delta;
+}
+
+/**
+ * 一组等间距峰的查找
+ * 棋盘 9 竖 10 横，线条严格等距 —— 用「等距约束」筛峰，比单纯找极值可靠得多
+ */
+function findEvenlySpacedPeaks(profile, count, minGap) {
+  const n = profile.length;
+  if (n < count * 3) return null;
+
+  let maxV = 0;
+  for (let i = 0; i < n; i++) if (profile[i] > maxV) maxV = profile[i];
+  if (maxV <= 0) return null;
+
+  // 1) 找局部极大值，做非极大值抑制
+  const peaks = [];
+  const th = maxV * 0.22;
+  for (let i = 2; i < n - 2; i++) {
+    const v = profile[i];
+    if (v < th) continue;
+    if (v < profile[i - 1] || v < profile[i + 1]) continue;
+    if (peaks.length && i - peaks[peaks.length - 1] < minGap) {
+      if (v > profile[peaks[peaks.length - 1]]) peaks[peaks.length - 1] = i;
+    } else {
+      peaks.push(i);
+    }
+  }
+  if (peaks.length < count) return null;
+
+  // 2) 在峰里找一组「等距」的位置
+  let best = null, bestScore = -1;
+  for (let s = 0; s < peaks.length; s++) {
+    for (let e = s + count - 1; e < peaks.length; e++) {
+      const span = peaks[e] - peaks[s];
+      const d = span / (count - 1);
+      if (d < minGap) continue;
+      if (s + count - 1 > peaks.length) break;
+
+      let score = 0, ok = true;
+      const pos = [];
+      for (let k = 0; k < count; k++) {
+        const target = peaks[s] + d * k;
+        let nearest = -1, nd = 1e9;
+        for (let p = 0; p < peaks.length; p++) {
+          const dd = Math.abs(peaks[p] - target);
+          if (dd < nd) { nd = dd; nearest = peaks[p]; }
+        }
+        if (nearest < 0 || nd > d * 0.22) { ok = false; break; }
+        score += profile[nearest];
+        pos.push(nearest);
+      }
+      if (ok && score > bestScore) { bestScore = score; best = pos; }
+    }
+  }
+  return best;
+}
+
+/**
+ * 自动检测棋盘四角
+ *
+ * 原理：中国象棋棋盘是严格等间距的 9 竖 10 横网格。
+ *   1. 转灰度
+ *   2. 沿 x 求「垂直边缘强度」投影 → 竖线会形成 9 个尖峰
+ *   3. 沿 y 求「水平边缘强度」投影 → 横线会形成 10 个尖峰
+ *   4. 用等距约束从尖峰里挑出真正的 9+10 条线
+ *   5. 最外四条线的交点就是四角
+ *
+ * 全程不需要任何颜色先验，也不怕棋子和高亮圈（它们只贡献零散噪声，
+ * 构不成等距序列）。
+ *
+ * @returns {[[number,number],[number,number],[number,number],[number,number]]|null}
+ *          顺序：左上 右上 右下 左下（图像像素坐标）
+ */
+function autoDetectBoard(pixels, w, h) {
+  if (!pixels || w < 60 || h < 60) return null;
+
+  // 1) 灰度
+  const gray = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const base = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = (base + x) * 4;
+      gray[base + x] = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+    }
+  }
+
+  // 2) 垂直边缘强度 → 竖线投影
+  const colScore = new Float32Array(w);
+  for (let x = 3; x < w - 3; x++) {
+    let s = 0;
+    for (let y = 2; y < h - 2; y += 2) {
+      const c = y * w + x;
+      const g = Math.abs(gray[c + 3] - gray[c - 3]);
+      if (g > 14) s += g;
+    }
+    colScore[x] = s;
+  }
+
+  // 3) 水平边缘强度 → 横线投影
+  const rowScore = new Float32Array(h);
+  for (let y = 3; y < h - 3; y++) {
+    let s = 0;
+    for (let x = 2; x < w - 2; x += 2) {
+      const c = y * w + x;
+      const g = Math.abs(gray[c + 3 * w] - gray[c - 3 * w]);
+      if (g > 14) s += g;
+    }
+    rowScore[y] = s;
+  }
+
+  // 4) 找 9 竖 10 横（格距至少 12 像素）
+  const cols = findEvenlySpacedPeaks(colScore, 9, 12);
+  const rows = findEvenlySpacedPeaks(rowScore, 10, 12);
+  if (!cols || !rows) return null;
+
+  // 5) 合理性校验：竖线间距 / 横线间距 比例应接近 1:1
+  const colStep = (cols[8] - cols[0]) / 8;
+  const rowStep = (rows[9] - rows[0]) / 9;
+  if (colStep < 10 || rowStep < 10) return null;
+  const ratio = rowStep / colStep;
+  if (ratio < 0.65 || ratio > 1.60) return null;
+
+  // 6) 亚像素细化：抛物线插值，把 5 像素误差压到 1~2 像素
+  const colsF = cols.map(i => refinePeak(colScore, i));
+  const rowsF = rows.map(i => refinePeak(rowScore, i));
+
+  return [
+    [colsF[0], rowsF[0]],   // 左上
+    [colsF[8], rowsF[0]],   // 右上
+    [colsF[8], rowsF[9]],   // 右下
+    [colsF[0], rowsF[9]]    // 左下
+  ];
+}
+
 class BoardRecognizer {
+
   /**
    * @param {object} cfg
    *   corners: [[x,y]x4] 屏幕像素坐标，顺序 [左上, 右上, 右下, 左下]
@@ -1934,7 +2082,8 @@ class BoardRecognizer {
 
 module.exports = {
   BoardRecognizer, EMPTY, RED_PC, BLK_PC,
-  bilinear, homography, applyH
+  bilinear, homography, applyH,
+  autoDetectBoard, findEvenlySpacedPeaks
 };
 
 };
@@ -2295,6 +2444,35 @@ var JJEngine = {
       session.recognizer.templates = null;
     }
     return { skipped: true };
+  },
+
+  /**
+   * 自动检测棋盘四角
+   * 棋盘是严格等间距的 9 竖 10 横网格，用边缘投影 + 等距约束就能定位，
+   * 完全不需要用户手点。
+   * @returns {Array<[number,number]>|null} [[左上],[右上],[右下],[左下]]，检测失败返回 null
+   */
+  autoDetectBoard: function (pixels, w, h) {
+    try {
+      var r = REC.autoDetectBoard(pixels, w, h);
+      if (!r) return null;
+      return [
+        [r[0][0], r[0][1]],
+        [r[1][0], r[1][1]],
+        [r[2][0], r[2][1]],
+        [r[3][0], r[3][1]]
+      ];
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /** 自动检测并直接应用（一步到位） */
+  autoCalibrate: function (pixels, w, h) {
+    var r = JJEngine.autoDetectBoard(pixels, w, h);
+    if (!r) return { ok: false };
+    JJEngine.setCorners(r);
+    return { ok: true, corners: r };
   },
 
   /**

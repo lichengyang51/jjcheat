@@ -158,6 +158,23 @@ final class AppModel: ObservableObject {
         return nil
     }
 
+    /// 最近一帧的原始数据（自动校准要用）
+    private var lastRawFrame: (data: Data, width: Int, height: Int)?
+
+    /// 自动校准：从最新一帧里自动找出棋盘四角，不需要手点
+    func autoCalibrate() -> (ok: Bool, message: String) {
+        guard let f = lastRawFrame else {
+            return (false, "还没有画面。先开录屏，等诊断卡里「画面帧」大于 0")
+        }
+        guard let corners = JJEngine.shared.autoDetectBoard(pixels: f.data, width: f.width, height: f.height) else {
+            return (false, "没找到棋盘。请让整个棋盘完整出现在画面里（别被裁掉边），再点一次")
+        }
+        applyCalibration(corners)
+        let w = corners[1][0] - corners[0][0]
+        let h = corners[3][1] - corners[0][1]
+        return (true, String(format: "自动校准成功：格宽 %.1f px、格高 %.1f px", w / 8, h / 9))
+    }
+
     /// 清空历史帧（每次开始校准时调用，避免拿到上一次的旧画面）
     func clearHistory() {
         frameHistory.removeAll()
@@ -178,6 +195,7 @@ final class AppModel: ObservableObject {
         receivedFrames = FrameServer.shared.frameCount
         frameSize = CGSize(width: frame.width, height: frame.height)
         lastFrameAt = Date()
+        lastRawFrame = (frame.data, frame.width, frame.height)
 
         // 主界面预览：每 3 帧刷新一次省内存
         if lastImage == nil || receivedFrames % 3 == 0 {

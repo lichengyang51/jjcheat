@@ -98,14 +98,26 @@ struct ContentView: View {
                     }
 
                     stepCard(num: "②", title: "校准棋盘",
-                             desc: "先切到 JJ象棋 摆出完整棋盘，再回来点这里，在画面上按「左上→右上→右下→左下」点棋盘最外圈 4 个交叉点") {
+                             desc: "棋盘位置固定，直接点「自动校准」即可。找不到再用手动校准") {
+                        Button {
+                            let r = model.autoCalibrate()
+                            alertText = r.message
+                            showAlert = true
+                        } label: {
+                            Label("自动校准（推荐）", systemImage: "wand.and.stars")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.green.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+
                         Button {
                             if let blocker = model.calibrationBlocker() {
                                 alertText = blocker
                                 showAlert = true
                                 return
                             }
-                            // 冻结当前可见的历史帧，避免新帧把你要的那一张挤出去
                             calibFrames = model.calibrationFrames()
                             if calibFrames.isEmpty {
                                 alertText = "还没有可用画面，重开录屏再试。"
@@ -114,7 +126,7 @@ struct ContentView: View {
                             }
                             showCalibration = true
                         } label: {
-                            Label(model.calibrated ? "重新校准" : "点我校准",
+                            Label(model.calibrated ? "手动重新校准" : "手动校准（兜底）",
                                   systemImage: "viewfinder")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
