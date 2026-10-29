@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T13:20:18.600Z
+ *  生成时间: 2026-10-29T13:26:40.590Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1696,10 +1696,11 @@ class BoardRecognizer {
    */
   constructor(cfg) {
     this.corners = cfg.corners ? cfg.corners.map(p => [p[0], p[1]]) : null;
-    // 0.34：只采棋子中心区域。用 0.40 时会扫到棋子外缘，
-    // 而 JJ象棋 会用绿圈/红圈高亮「上一步走的子」，
-    // 红圈是纯红，会被误当成红子字，导致刚走过的棋子识别结果变化。
-    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.34;
+    // 0.30：只采棋子中心区域。
+    //   0.40 会扫到棋子外缘——JJ象棋 会用绿圈/红圈高亮上一步走的子，
+    //   红圈是纯红会被误当成红子字。
+    //   0.34 仍会碰到棋盘最外圈的深色边框线，把边框当成「墨迹」→ 空格被判成有子。
+    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.30;
     this.bgModel = cfg.bgModel || null;
     this.templates = cfg.templates || null;
     this.lastStats = null;
@@ -1772,14 +1773,11 @@ class BoardRecognizer {
    */
   sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
     let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0, skipped = 0;
+    let ink = 0, redInk = 0, darkInk = 0;
     const PW = 16;
     let patchW = null, patchR = null;
 
-    // 纯绿像素过滤器：
-    //   JJ象棋 会在「可走位置」画绿色小点（正好落在格子交叉点上），
-    //   被吃的棋子也会套绿色高亮圈。这些绿色既不是棋子也不是棋盘，
-    //   混进统计里会把「空格」误判成「有子」，进而把 FEN 算错、
-    //   着法在「相七进五 / 仕六进五」之间乱跳。
+    // 纯绿像素过滤器（可走位置绿点、绿色高亮圈）
     const isPureGreen = (R, G, B) => (G > R + 30 && G > B + 30 && G > 90);
 
     if (wantPatch) {
@@ -1796,11 +1794,7 @@ class BoardRecognizer {
           const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
 
           const idx = py * PW + px;
-          if (isPureGreen(R, G, B)) {
-            // 绿点/绿圈：patch 里留 0（当作「不暖、不红」），统计也不计入
-            skipped++;
-            continue;
-          }
+          if (isPureGreen(R, G, B)) { skipped++; continue; }
 
           const L = 0.299 * R + 0.587 * G + 0.114 * B;
           const rb = R - B;
@@ -1815,10 +1809,23 @@ class BoardRecognizer {
           if (L < 72) dark++;
           if (L > 178) bright++;
           if (isWarm) warm++;
+
+          // ---- 墨迹特征（核心判据）----
+          // 棋子上的「字」是深色或红色，而棋子盘面、棋盘、绿点、高亮圈都是亮的。
+          // 区分「红字」和「暖色盘面」靠绿通道：
+          //   红字 (170, 30, 30)  G 极低（约 30）
+          //   盘面 (200,150,100)  G 中等（约 150）
+          // 之前只用 R-G>45，盘面 R-G=50 也被算成红字，导致黑子全被判成红子。
+          const isRedInk = (R > 95 && G < 115 && (R - G) > 55 && (R - B) > 65);
+          const isDarkInk = (L < 85) && !isRedInk;
+          if (isRedInk || isDarkInk) ink++;
+          if (isRedInk) redInk++;
+          if (isDarkInk) darkInk++;
         }
       }
     } else {
-      const step = Math.max(1, Math.floor(radius / 4));
+      // 稀疏采样版也统计墨迹（精度略低但够用）
+      const step = Math.max(1, Math.floor(radius / 5));
       const r2 = radius * radius;
       for (let dy = -radius; dy <= radius; dy += step) {
         for (let dx = -radius; dx <= radius; dx += step) {
@@ -1836,19 +1843,26 @@ class BoardRecognizer {
           if (L < 72) dark++;
           if (L > 178) bright++;
           if (rb > 26 && R > 85) warm++;
+
+          const isRedInk = (R > 95 && G < 115 && (R - G) > 55 && (R - B) > 65);
+          const isDarkInk = (L < 85) && !isRedInk;
+          if (isRedInk || isDarkInk) ink++;
+          if (isRedInk) redInk++;
+          if (isDarkInk) darkInk++;
         }
       }
     }
 
-    if (n === 0) {
-      return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, skipped, patchW, patchR };
-    }
+    const denom = n > 0 ? n : 1;
     return {
-      meanL: sumL / n,
-      redR: red / n,
-      darkR: dark / n,
-      brightR: bright / n,
-      warmR: warm / n,
+      meanL: sumL / denom,
+      redR: red / denom,
+      darkR: dark / denom,
+      brightR: bright / denom,
+      warmR: warm / denom,
+      inkR: ink / denom,
+      redInkR: redInk / denom,
+      darkInkR: darkInk / denom,
       n,
       skipped,
       patchW,
@@ -2043,28 +2057,69 @@ class BoardRecognizer {
   }
 
   /**
-   * 模板匹配版三分类
-   * 同时返回 codes（具体兵种编码 0-14），用于区分棋盘朝向
+   * 模板匹配版三分类（以「墨迹」为主判据）
+   *
+   * 分工：
+   *   墨迹（字是深色或红色）→ 决定「有没有子」和「红还是黑」   ← 最可靠，绿点/高亮圈都骗不到
+   *   模板匹配              → 只决定「是哪个兵种」            ← 模板错了也不会把空判成有子
+   *
+   * 之前完全靠模板判有无，一旦模板受干扰（绿点、高亮圈、采样偏移），
+   * 就会出现「空格被当成棋子」这种致命错误，整个 FEN 全废。
    */
   classifyByTemplate(stats) {
     const grid = new Int8Array(90);
     const codes = new Int8Array(90);
     const conf = new Float32Array(90);
+
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
       if (!s || !s.patchW) { grid[sq] = EMPTY; codes[sq] = 0; continue; }
-      const r = this.matchCell(s);
-      conf[sq] = r.score;
-      if (r.key === 'E') {
+
+      // 1) 墨迹判有无
+      //    阈值 0.10：格子中心的字墨占比通常 0.15~0.30，
+      //    而棋盘最外圈的深色边框线即使漏进来也就 0.06~0.09，卡在中间。
+      //    （0.06 时 r8c0 把边框当成墨迹，凭空多出一个黑卒 → 评分直接 -3.59）
+      const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
+      if (inkR < 0.10) {
         grid[sq] = EMPTY;
         codes[sq] = 0;
+        continue;
+      }
+
+      // 2) 墨迹颜色定红黑
+      const redInkR = (typeof s.redInkR === 'number') ? s.redInkR : 0;
+      const darkInkR = (typeof s.darkInkR === 'number') ? s.darkInkR : 0;
+      const inkRed = redInkR >= darkInkR;
+      const inkColor = inkRed ? RED_PC : BLK_PC;
+
+      // 3) 模板只用来认兵种
+      const r = this.matchCell(s);
+      conf[sq] = r.score;
+
+      if (r.key === 'E') {
+        // 墨迹说有子、模板说空 → 信墨迹，兵种先给个占位（兵/卒）
+        grid[sq] = inkColor;
+        codes[sq] = inkRed ? 7 : 14;
+        continue;
+      }
+
+      let code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
+      if (!code) {
+        grid[sq] = inkColor;
+        codes[sq] = inkRed ? 7 : 14;
+        continue;
+      }
+
+      const codeIsRed = (code < 8);
+      if (codeIsRed === inkRed) {
+        // 模板和墨迹一致
+        grid[sq] = inkColor;
+        codes[sq] = code;
       } else {
-        const code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
-        if (!code || code === 0) { grid[sq] = EMPTY; codes[sq] = 0; }
-        else {
-          codes[sq] = code;
-          grid[sq] = (code < 8) ? RED_PC : BLK_PC;
-        }
+        // 颜色冲突 → 信墨迹，兵种取对应阵营的同一兵种
+        const t = codeIsRed ? code : code - 7;
+        grid[sq] = inkColor;
+        codes[sq] = inkRed ? t : (t + 7);
       }
     }
     return { grid, conf, codes };
