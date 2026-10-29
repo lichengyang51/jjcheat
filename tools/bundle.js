@@ -18,6 +18,7 @@ const ENTRY_FILES = [
   'cst/notation',
   'cst/eval',
   'cst/search',
+  'vision/templates',
   'vision/recognizer',
   'vision/tracker'
 ];
@@ -45,11 +46,17 @@ function readModule(id) {
   let m;
   while ((m = re.exec(code)) !== null) {
     const dep = normId(id, m[1]);
-    readModule(dep);
+    // 允许省略 .js —— 生成器与 recognizer 里的写法都是 './templates.js'
+    if (sources.has(dep) || fs.existsSync(path.join(SRC, dep + '.js'))) { readModule(dep); continue; }
+    const stripped = dep.replace(/\.js$/, '');
+    readModule(stripped);
   }
 }
 
-for (const f of ENTRY_FILES) readModule(f);
+for (const f of ENTRY_FILES) {
+  const id = f.replace(/\.js$/, '');
+  readModule(id);
+}
 
 // 生成模块表
 let out = '';
@@ -237,6 +244,10 @@ var JJEngine = {
     session.lastResult = null;
     session.lastGridHash = 0;
     session.gridStable = 0;
+    // 逐格「上一稳定值」也清掉，否则换局后残留上一局的棋子
+    session.stableCodes = null;
+    session.lowStreak = null;
+    session.lowConfCount = 0;
     return session.tracker.fen;
   },
 
@@ -290,7 +301,12 @@ var JJEngine = {
     }
     session.flipped = flipped;
 
-    session.recognizer.learnTemplates(stats, flipped ? flipPieceMap(startMap) : startMap);
+    // ★ 不再用第一帧去学模板。
+    //   原来的做法是把第一帧当成标准开局，用开局棋子位置给模板贴标签；
+    //   用户中途进对局时第一帧就是中局，标签全错（车被标成马、炮被标成兵），
+    //   于是识别出来的 FEN 永远是开局 rnbakabnr/9/1c5c1/...。
+    //   现在模板是离线从已知正确盘面生成、内置在引擎里的，和当前帧无关。
+    //   这里只做校验，不改模板。
 
     // 验证：用刚学到的模板识别同一帧，和标准开局比（翻转时先翻回标准坐标）
     var clsV = session.recognizer.classify(stats);
@@ -326,7 +342,12 @@ var JJEngine = {
   skipLearning: function () {
     if (session.recognizer) {
       session.recognizer.bgModel = null;
-      session.recognizer.templates = null;
+      // 模板不能清空 —— 内置模板是离线从已知正确盘面生成的，
+      // 清空后就只剩「纯颜色判断」，识别率会掉一大截。
+      // 这里只是「重新装回内置模板」，等价于丢弃任何运行时学出来的模板。
+      try {
+        session.recognizer.templates = session.recognizer._buildBuiltinTemplates();
+      } catch (e) { /* 保持原样 */ }
     }
     return { skipped: true };
   },
@@ -362,6 +383,15 @@ var JJEngine = {
    * 校验方法：网格算出来后，采 90 个格子，统计「暖色盘面」的格子数
    * 和它们到最近交叉点的偏移。棋子数太少或偏移太大 → 判定网格不可信。
    */
+  /**
+   * 自动检测的调试信息：初始边缘投影四角 / 棋子反推结果 / 最终走了哪条路
+   */
+  autoDetectDebug: function (pixels, w, h) {
+    var r = null;
+    try { r = JJEngine.autoDetectBoard(pixels, w, h); } catch (e) { return { error: String(e && e.message || e) }; }
+    return { corners: r, debug: REC.autoDetectBoard.lastDebug || null };
+  },
+
   autoDetectBoardChecked: function (pixels, w, h) {
     var corners = JJEngine.autoDetectBoard(pixels, w, h);
     if (!corners) return { ok: false, reason: 'no_grid' };
@@ -396,6 +426,33 @@ var JJEngine = {
     if (!r) return { ok: false };
     JJEngine.setCorners(r);
     return { ok: true, corners: r };
+  },
+
+  /** 调试：直接输出单帧的兵种识别结果（不走稳定性门槛、不写 session） */
+  classifyBoard: function (pixels, w, h) {
+    if (!session.recognizer) return null;
+    var stats = session.recognizer.sampleAll(pixels, w, h, true);
+    var cls = null;
+    try { cls = session.recognizer.classify(stats); } catch (e) { return { error: String(e && e.message || e) }; }
+    if (!cls || !cls.codes) return { error: 'no_codes' };
+    var codes = Array.prototype.slice.call(cls.codes);
+    var redN = 0, blkN = 0, details = [];
+    for (var i = 0; i < 90; i++) {
+      var v = codes[i];
+      if (!v) continue;
+      if (v >= 1 && v <= 7) redN++; else blkN++;
+      details.push([i, v]);
+    }
+    return {
+      codes: codes,
+      fen: codesToBoardFen(codes),
+      redN: redN,
+      blkN: blkN,
+      valid: validateCodes(codes),
+      usable: codesUsable(codes),
+      occupied: details.length,
+      details: details
+    };
   },
 
   /** 调试：输出 90 个格子的原始特征，用来定位「哪一格为什么判错」 */
@@ -434,6 +491,47 @@ var JJEngine = {
     // 模板匹配需要 patch，所以这里必须采
     var stats = session.recognizer.sampleAll(pixels, w, h, true);
     var cls = session.recognizer.classify(stats);
+
+    // ★ 逐格置信度 + 保留上一稳定值
+    //
+    // 为什么需要：JJ象棋 在落子瞬间会把刚走的棋子放大 1.25 倍并偏移十几像素
+    // （还有红圈/白圈/绿点），那一两帧的模板分数会掉到 0.2 左右（正常 1.3~2.7），
+    // 于是红仕被判成红兵。这些效果「只在特定时候出现」，是瞬时干扰。
+    //
+    // 做法：分数够高的格子直接采信；分数太低的格子沿用上一帧的稳定值，
+    // 连续多帧都低才认这一次的结果（避免被一个动画帧永久带偏）。
+    var LOWCONF = 0.55;
+    var prevCodes = session.stableCodes;
+    var mergedCodes = new Array(90);
+    var lowConfCount = 0;
+    for (var sm = 0; sm < 90; sm++) {
+      var raw = cls.codes ? cls.codes[sm] : 0;
+      var conf = cls.conf ? (cls.conf[sm] || 0) : 1;
+      var st = stats[sm];
+      var warm = st ? (st.warmR || 0) : 0;
+      var okCell;
+      if (!raw) {
+        // 判空：暖色占比确实很低才可信
+        okCell = (warm < 0.12);
+      } else {
+        okCell = (conf >= LOWCONF);
+      }
+      if (!okCell) lowConfCount++;
+      if (okCell || !prevCodes || prevCodes[sm] === undefined || prevCodes[sm] === null) {
+        mergedCodes[sm] = raw;
+        session.lowStreak = session.lowStreak || new Array(90).fill(0);
+        session.lowStreak[sm] = 0;
+      } else if ((session.lowStreak[sm] = (session.lowStreak[sm] || 0) + 1) >= 8) {
+        // 连续 8 帧都不确定，就接受新值，免得永远卡在旧局面上
+        mergedCodes[sm] = raw;
+        session.lowStreak[sm] = 0;
+      } else {
+        mergedCodes[sm] = prevCodes[sm];
+      }
+    }
+    if (cls.codes) cls.codes = mergedCodes;
+    session.lowConfCount = lowConfCount;
+
     // 画面翻转时（用户执黑）翻回标准坐标，引擎内部一律「红在下」
     var grid = session.flipped ? flipGrid(cls.grid) : cls.grid;
 
@@ -508,13 +606,17 @@ var JJEngine = {
         session.lastFenUpdateTime = nowMs;
         out.moveDetected = true;
         session.lastResult = null;    // 强制重算
+        session.stableCodes = mergedCodes.slice();
       } else if (!session.lastBoardFen) {
         // 第一次进来先落地，不占用限流
         session.lastBoardFen = boardFen;
         session.lastFenUpdateTime = nowMs;
         out.moveDetected = true;
         session.lastResult = null;
+        session.stableCodes = mergedCodes.slice();
       }
+      // 局面没变也要更新「上一稳定值」，这样高置信度的格子能持续收敛
+      if (!session.stableCodes) session.stableCodes = mergedCodes.slice();
       codesOk = true;
 
       // FEN 的走子方一律取「我方」。

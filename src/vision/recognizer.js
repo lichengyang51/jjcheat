@@ -300,8 +300,367 @@ function refineGrid(pixels, w, h, corners, iterations) {
 
   return cur;
 }
+/**
+ * 一维等间距拟合：给一堆「应该落在 count 条等距线上」的坐标，
+ * 反解出 origin 与 step。
+ *
+ * 用「分配 → 最小二乘 → 再分配」的迭代，对缺失线（某列/某行没棋子）免疫。
+ *
+ * @param {number[]} vals 观测坐标
+ * @param {number} count 线数
+ * @param {number} stepHint 初始格距估计
+ * @param {number} tolRatio 允许的残差（相对格距），超出的观测点丢弃
+ * @returns {{origin:number, step:number, used:number}|null}
+ */
+function fitEvenLines(vals, count, stepHint, tolRatio) {
+  if (!vals || vals.length < 3 || !(count >= 2)) return null;
+  const tol = (tolRatio || 0.42) * stepHint;
+  const sorted = vals.slice().sort((a, b) => a - b);
+
+  // 两个候选初值：端点撑满 / 中位间隔
+  const seeds = [];
+  seeds.push({ origin: sorted[0], step: (sorted[sorted.length - 1] - sorted[0]) / (count - 1) });
+  const gaps = [];
+  for (let i = 1; i < sorted.length; i++) gaps.push(sorted[i] - sorted[i - 1]);
+  gaps.sort((a, b) => a - b);
+  const medGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : stepHint;
+  seeds.push({ origin: sorted[0] - Math.round(((sorted[0] - sorted[0]) / medGap)) * medGap, step: medGap });
+
+  let best = null;
+
+  for (let s = 0; s < seeds.length; s++) {
+    let origin = seeds[s].origin;
+    let step = seeds[s].step;
+    if (!(step > 2)) continue;
+    let used = 0;
+
+    for (let it = 0; it < 14; it++) {
+      const buckets = [];
+      for (let k = 0; k < count; k++) buckets.push([]);
+      for (let i = 0; i < sorted.length; i++) {
+        const v = sorted[i];
+        const k = Math.round((v - origin) / step);
+        if (k < 0 || k >= count) continue;
+        if (Math.abs(v - (origin + k * step)) > tol) continue;
+        buckets[k].push(v);
+      }
+      // 最小二乘：每个有观测的 k 取均值，再拟合 v = origin + step*k
+      let Sk = 0, Sk2 = 0, Sv = 0, Skv = 0, N = 0;
+      for (let k = 0; k < count; k++) {
+        const b = buckets[k];
+        if (!b.length) continue;
+        let sum = 0;
+        for (let i = 0; i < b.length; i++) sum += b[i];
+        const m = sum / b.length;
+        Sk += k; Sk2 += k * k; Sv += m; Skv += k * m; N++;
+      }
+      if (N < 3) break;
+      const den = N * Sk2 - Sk * Sk;
+      if (Math.abs(den) < 1e-9) break;
+      const nb = (N * Skv - Sk * Sv) / den;
+      const na = (Sv - nb * Sk) / N;
+      if (!isFinite(nb) || !isFinite(na) || Math.abs(nb) < 2) break;
+      const moved = Math.abs(nb - step) + Math.abs(na - origin);
+      origin = na; step = nb; used = N;
+      if (moved < 0.05) break;
+    }
+
+    if (used < 3 || !(step > 2)) continue;
+    // 残差 + 两端覆盖检查
+    let res = 0, cnt = 0, hasLow = false, hasHigh = false;
+    for (let i = 0; i < sorted.length; i++) {
+      const v = sorted[i];
+      const k = Math.round((v - origin) / step);
+      if (k < 0 || k >= count) continue;
+      const d = Math.abs(v - (origin + k * step));
+      if (d > tol) continue;
+      if (k === 0) hasLow = true;
+      if (k === count - 1) hasHigh = true;
+      res += d; cnt++;
+    }
+    if (cnt < 3) continue;
+    // 首尾两条线必须都有观测点 —— 否则说明 count/step 配错了，
+    // 典型症状是把半幅画面当成整块棋盘（实测纵轴拟合到 81px/格）。
+    if (!hasLow || !hasHigh) continue;
+    const score = res / cnt - used * 0.01;
+    if (!best || score < best.score) {
+      best = { origin: origin, step: step, used: used, score: score, residual: res / cnt };
+    }
+  }
+
+  return best;
+}
+
+/**
+ * 一维峰值提取（带平滑与合并）
+ */
+function findPeaks1D(proj, len, minGap, relTh) {
+  const sm = new Float32Array(len);
+  for (let i = 1; i < len - 1; i++) sm[i] = (proj[i - 1] + proj[i] * 2 + proj[i + 1]) * 0.25;
+  let maxv = 0;
+  for (let i = 0; i < len; i++) if (sm[i] > maxv) maxv = sm[i];
+  if (!(maxv > 0)) return [];
+  const th = maxv * (relTh || 0.15);
+  const raw = [];
+  for (let i = 1; i < len - 1; i++) {
+    if (sm[i] < th) continue;
+    if (sm[i] < sm[i - 1] || sm[i] < sm[i + 1]) continue;
+    // 峰值附近质心细化
+    let s = 0, sw = 0;
+    const R = 4;
+    for (let d = -R; d <= R; d++) {
+      const j = i + d;
+      if (j < 1 || j >= len - 1) continue;
+      s += j * sm[j]; sw += sm[j];
+    }
+    raw.push(sw > 0 ? s / sw : i);
+  }
+  const merged = [];
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i];
+    if (merged.length && p - merged[merged.length - 1] < minGap) {
+      merged[merged.length - 1] = (merged[merged.length - 1] + p) * 0.5;
+    } else merged.push(p);
+  }
+  return merged;
+}
+
+/**
+ * ★ 用真实棋子反推网格（最可靠的一招）
+ *
+ * 原理：棋子只可能落在交叉点上。所以把「棋子盘面」像素分别投到 x 轴和 y 轴，
+ * 得到 9 条竖线 / 10 条横线上的一簇峰值；对这些峰值做等间距最小二乘，
+ * 就得到 格距 和 起点 —— 边缘投影那 10~20% 的误差被彻底抹平。
+ *
+ * 这一步解决的是「初始格距偏小 → 越往下越偏 → 第 7 行偏 69 像素 → 炮被判空」的根因。
+ *
+ * @param {Uint8ClampedArray} pixels RGBA
+ * @param {number} w
+ * @param {number} h
+ * @param {Array<[number,number]>} corners 当前四角（仅作为搜索区域）
+ * @returns {Array<[number,number]>|null} 修正后的四角，失败返回 null
+ */
+/* ============================================================
+ * ★ 棋盘定位：归一化先验 + 全格对齐搜索
+ *
+ * 不再依赖「边缘投影 + 等距拟合」。原因：
+ *   棋盘线是浅色细线，边缘强度弱；而 JJ象棋 的界面是木纹棕色，
+ *   暖色干扰极多，投影峰值里既有棋子也有 UI 木块，
+ *   等距拟合经常「少认几行」，格高实测从 61.9 跑到 81.0（偏 31%）。
+ *   这种误差逐行累积，到第 7 行采样点已经偏了整整一格，炮就被判成空。
+ *
+ * 现在的做法：
+ *   1. 棋子圆盘（米黄/浅褐）是最好认的东西 —— R−B>45 且够亮。
+ *   2. 棋子只可能落在交叉点上。所以直接在 (起点, 格距) 上做搜索，
+ *      打分 = 90 个交叉点的「圆盘密度之和」，命中数越高越对。
+ *   3. 搜索起点用归一化先验（JJ象棋 布局是死的），
+ *      四张真实截图反解出来的结果完全一致：
+ *         x0/W = 0.0666   cw/W = 0.1078
+ *         y0/H = 0.2773   ch/H = 0.0484
+ *      开局命中数恰好 32 = 棋盘上的棋子数，中局 30 = 少了两个子。
+ *
+ * 这一步之后格距误差 < 1 像素，采样子弹不再打偏。
+ * ============================================================ */
+
+/** JJ象棋 棋盘在整屏截图中的归一化位置（多张真实截图反解，四张完全一致） */
+const BOARD_PRIOR = {
+  x0: 0.0666, cw: 0.1078,
+  y0: 0.2773, ch: 0.0484
+};
+
+/** 棋子圆盘掩码 + 积分图（用来 O(1) 求任意方框内的圆盘密度） */
+function buildDiskIntegral(pixels, w, h) {
+  const mask = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const base = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = (base + x) * 4;
+      const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+      if (R - B <= 45 || R <= 170) continue;
+      const L = 0.299 * R + 0.587 * G + 0.114 * B;
+      if (L <= 150) continue;
+      mask[base + x] = 1;
+    }
+  }
+  const iw = w + 1;
+  const integ = new Int32Array(iw * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rs = 0;
+    const base = y * w;
+    for (let x = 0; x < w; x++) {
+      rs += mask[base + x];
+      integ[(y + 1) * iw + x + 1] = integ[y * iw + x + 1] + rs;
+    }
+  }
+  return { integ: integ, iw: iw, count: (function () { let n = 0; for (let i = 0; i < mask.length; i++) n += mask[i]; return n; })() };
+}
+
+/** 给定一组网格参数，统计 90 个交叉点上的棋子圆盘命中情况 */
+function gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rad) {
+  let score = 0, hits = 0;
+  const rr = Math.max(2, Math.round(rad));
+  for (let r = 0; r < 10; r++) {
+    const y = y0 + r * ch;
+    const ya = Math.round(y - rr), yb = Math.round(y + rr);
+    if (ya < 0 || yb >= h) continue;
+    for (let c = 0; c < 9; c++) {
+      const x = x0 + c * cw;
+      const xa = Math.round(x - rr), xb = Math.round(x + rr);
+      if (xa < 0 || xb >= w) continue;
+      const a = integ[ya * iw + xa];
+      const b = integ[ya * iw + xb + 1];
+      const cc = integ[(yb + 1) * iw + xa];
+      const d = integ[(yb + 1) * iw + xb + 1];
+      const area = (xb - xa + 1) * (yb - ya + 1);
+      const dens = (d - b - cc + a) / area;
+      score += dens;
+      if (dens > 0.35) hits++;
+    }
+  }
+  return { score: score, hits: hits };
+}
+
+/**
+ * ★ 用棋子反推网格（核心定位函数）
+ *
+ * @param {Uint8ClampedArray} pixels RGBA
+ * @param {number} w
+ * @param {number} h
+ * @param {Array<[number,number]>} corners 可选：额外的搜索起点（边缘投影结果）
+ * @returns {Array<[number,number]>|null}
+ */
+function refineByPieces(pixels, w, h, corners) {
+  refineByPieces.lastDebug = null;
+  if (!pixels || w < 60 || h < 60) return null;
+
+  const di = buildDiskIntegral(pixels, w, h);
+  if (di.count < 400) return null;    // 画面里几乎没有棋子圆盘，不是对局
+  const integ = di.integ, iw = di.iw;
+
+  // 候选起点：归一化先验 + 边缘投影结果（如果有）
+  const seeds = [];
+  seeds.push({ x0: BOARD_PRIOR.x0 * w, cw: BOARD_PRIOR.cw * w, y0: BOARD_PRIOR.y0 * h, ch: BOARD_PRIOR.ch * h, tag: 'prior' });
+  if (corners && corners.length >= 4) {
+    const cw0 = (corners[1][0] - corners[0][0]) / 8;
+    const ch0 = (corners[3][1] - corners[0][1]) / 9;
+    if (cw0 > 8 && ch0 > 8) {
+      seeds.push({ x0: corners[0][0], cw: cw0, y0: corners[0][1], ch: ch0, tag: 'edges' });
+    }
+  }
+
+  let best = null;
+
+  function consider(x0, cw, y0, ch, tag) {
+    // 边界与比例检查
+    if (!(cw > w * 0.03) || !(ch > h * 0.02)) return;
+    if (cw > w * 0.30 || ch > h * 0.30) return;
+    const ratio = cw / ch;
+    if (ratio < 0.55 || ratio > 1.80) return;
+    const rr = Math.min(cw, ch) * 0.30;
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr);
+    if (r.hits < 6) return;
+    if (!best || r.hits > best.hits || (r.hits === best.hits && r.score > best.score)) {
+      best = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag };
+    }
+  }
+
+  // ---- 粗搜：格距 ±6%，起点 ±0.6 格 ----
+  for (let s = 0; s < seeds.length; s++) {
+    const sd = seeds[s];
+    for (let i = -2; i <= 2; i++) {
+      for (let j = -2; j <= 2; j++) {
+        const cw = sd.cw * (1 + i * 0.03);
+        const ch = sd.ch * (1 + j * 0.03);
+        for (let a = -3; a <= 3; a++) {
+          for (let b = -3; b <= 3; b++) {
+            consider(sd.x0 + a * 0.2 * sd.cw, cw, sd.y0 + b * 0.2 * sd.ch, ch, sd.tag);
+          }
+        }
+      }
+    }
+  }
+  if (!best) return null;
+
+  // ---- 细搜：格距 ±1.5%，起点 ±0.1 格 ----
+  {
+    const b0 = best;
+    for (let i = -1; i <= 1; i++) {
+      for (let j = -1; j <= 1; j++) {
+        const cw = b0.cw * (1 + i * 0.0075);
+        const ch = b0.ch * (1 + j * 0.0075);
+        for (let a = -2; a <= 2; a++) {
+          for (let b = -2; b <= 2; b++) {
+            consider(b0.x0 + a * 0.04 * b0.cw, cw, b0.y0 + b * 0.04 * b0.ch, ch, b0.tag);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- 超细：格距 ±0.4%，起点 ±0.02 格 ----
+  {
+    const b0 = best;
+    for (let i = -1; i <= 1; i++) {
+      for (let j = -1; j <= 1; j++) {
+        const cw = b0.cw * (1 + i * 0.002);
+        const ch = b0.ch * (1 + j * 0.002);
+        for (let a = -2; a <= 2; a++) {
+          for (let b = -2; b <= 2; b++) {
+            consider(b0.x0 + a * 0.008 * b0.cw, cw, b0.y0 + b * 0.008 * b0.ch, ch, b0.tag);
+          }
+        }
+      }
+    }
+  }
+
+  if (!best) return null;
+  // 命中太少说明不是对局画面（比如停在菜单/结算界面），宁可报失败
+  if (best.hits < 8) return null;
+
+  refineByPieces.lastDebug = {
+    cellW: best.cw, cellH: best.ch, ratio: best.cw / best.ch,
+    hits: best.hits, score: best.score, seed: best.tag,
+    x0: best.x0, y0: best.y0, diskPixels: di.count
+  };
+
+  const gx0 = best.x0, gx8 = best.x0 + 8 * best.cw;
+  const gy0 = best.y0, gy9 = best.y0 + 9 * best.ch;
+  return [
+    [gx0, gy0],
+    [gx8, gy0],
+    [gx8, gy9],
+    [gx0, gy9]
+  ];
+}
+
 function autoDetectBoard(pixels, w, h) {
   if (!pixels || w < 60 || h < 60) return null;
+
+  // ① 首选：棋子圆盘全格对齐（快、准、稳，不依赖棋盘线）
+  refineByPieces.lastDebug = null;
+  var fast = refineByPieces(pixels, w, h, null);
+  if (fast) {
+    autoDetectBoard.lastDebug = { used: 'pieces', pieceFit: refineByPieces.lastDebug };
+    return fast;
+  }
+
+  // ② 兜底：棋盘线边缘投影 + 等距拟合，再用棋子校验一次
+  var edge = edgeDetectBoard(pixels, w, h);
+  if (!edge) {
+    autoDetectBoard.lastDebug = { used: 'fail', pieceFit: null };
+    return null;
+  }
+  refineByPieces.lastDebug = null;
+  var fixed = refineByPieces(pixels, w, h, edge);
+  autoDetectBoard.lastDebug = {
+    used: fixed ? 'edges+pieces' : 'edges',
+    edge: edge,
+    pieceFit: refineByPieces.lastDebug
+  };
+  return fixed || edge;
+}
+
+function edgeDetectBoard(pixels, w, h) {
 
   // 1) 灰度
   const gray = new Float32Array(w * h);
@@ -384,26 +743,13 @@ function autoDetectBoard(pixels, w, h) {
   const colsF = colsFit.map(x => snapToPeak(colScore, x));
   const rowsF = rowsFit.map(y => snapToPeak(rowScore, y));
 
-  // ★ 自校准：用棋子实际位置反推精确网格
-  //   边缘投影只能找到「大概的线」，格距误差 10~20%，
-  //   累积到第 7 行采样点就偏了整整一格。
-  //   棋子一定落在交叉点上，所以用它们反向拟合网格能把误差抹平。
-  var initial = [
-    [colsF[0], rowsF[0]],
-    [colsF[8], rowsF[0]],
-    [colsF[8], rowsF[9]],
-    [colsF[0], rowsF[9]]
-  ];
-  return refineGrid(pixels, w, h, initial, 3);
-
-  /* 原始返回值（已被自校准替代）
+  // 边缘投影只给「大概的线」，交给调用方用棋子再校正一次
   return [
     [colsF[0], rowsF[0]],   // 左上
     [colsF[8], rowsF[0]],   // 右上
     [colsF[8], rowsF[9]],   // 右下
     [colsF[0], rowsF[9]]    // 左下
   ];
-  */
 }
 
 
@@ -426,8 +772,9 @@ class BoardRecognizer {
     //   放大到 0.42（约 26 像素）就能采到圈外的棋子盘面。
     this.cellRadiusRatio = cfg.cellRadiusRatio || 0.42;
     this.bgModel = cfg.bgModel || null;
-    this.templates = cfg.templates || null;
     this.lastStats = null;
+    // 模板在 patchWeights 构建完才能归一化，所以先占位、后面再装
+    this.templates = null;
 
     // 径向权重：中心权重高、边缘权重低。
     // 空格的 patch 边缘是棋盘网格线（深色直线），棋子的边缘是圆形描边，
@@ -450,6 +797,32 @@ class BoardRecognizer {
       for (let i = 0; i < w.length; i++) w[i] /= sum;
       return w;
     })();
+
+    // ★ 内置模板：从已知正确的开局截图离线生成，装在引擎里。
+    //   这样中途进入对局也能直接认，不再依赖「第一帧必须是开局」。
+    this.templates = cfg.templates || this._buildBuiltinTemplates();
+    this.templateCount = (function () { let n = 0; for (const k in this.templates) n += this.templates[k].length; return n; }).call(this);
+  }
+
+  /**
+   * 从 templates.js 解包并归一化内置模板
+   */
+  _buildBuiltinTemplates() {
+    let raw;
+    try { raw = require('./templates').unpack(); } catch (e) { return null; }
+    const out = {};
+    for (const key in raw) {
+      const list = raw[key];
+      const conv = [];
+      for (let i = 0; i < list.length; i++) {
+        const nw = this.normalizePatch(list[i].w);
+        const nr = this.normalizePatch(list[i].r);
+        if (!nw || !nr) continue;
+        conv.push({ w: nw, r: nr, i: list[i].i ? this.normalizePatch(list[i].i) : null });
+      }
+      if (conv.length) out[key] = conv;
+    }
+    return out;
   }
 
   /** 计算 90 个交叉点的像素坐标；返回 Float32Array(180) */
@@ -498,8 +871,9 @@ class BoardRecognizer {
   sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
     let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0, skipped = 0;
     let ink = 0, redInk = 0, darkInk = 0;
+    let coreN = 0, coreInk = 0, coreRedInk = 0, coreDarkInk = 0;
     const PW = 16;
-    let patchW = null, patchR = null;
+    let patchW = null, patchR = null, patchI = null, patchValid = null;
 
     // 纯绿像素过滤器（可走位置绿点、绿色高亮圈）
     const isPureGreen = (R, G, B) => (G > R + 30 && G > B + 30 && G > 90);
@@ -507,8 +881,13 @@ class BoardRecognizer {
     if (wantPatch) {
       patchW = new Uint8Array(PW * PW);
       patchR = new Uint8Array(PW * PW);
+      patchI = new Uint8Array(PW * PW);
+      // 有效像素掩码：0 = 这一格像素是干扰（高亮圈 / 绿点 / 白边），
+      // 模板比对时把它的权重归零，避免「上一步的高亮圈」把兵种带偏。
+      patchValid = new Uint8Array(PW * PW);
       const span = radius * 2;
       const stepPx = span / PW;
+      const halfP = (PW - 1) / 2;
       for (let py = 0; py < PW; py++) {
         for (let px = 0; px < PW; px++) {
           const sx = Math.round(cx - radius + (px + 0.5) * stepPx);
@@ -518,16 +897,22 @@ class BoardRecognizer {
           const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
 
           const idx = py * PW + px;
+          const du = (px - halfP) / halfP, dv = (py - halfP) / halfP;
+          const rr = Math.sqrt(du * du + dv * dv);
           if (isPureGreen(R, G, B)) { skipped++; continue; }
           // 白色高亮圈：既不是墨也不是暖色，直接跳过，
           // 否则它会把整格的 ink/warm 拉成 0。
           if (R > 200 && G > 200 && B > 200) { skipped++; continue; }
+          // 外圈的「红色高亮圈」：亮红、绿通道很低，和棋子盘面/红字都不同。
+          // 圈落在 rr≈0.8~0.95，只在这一圈里判，不影响中心字形。
+          if (rr > 0.66 && R > 150 && G < 125 && (R - G) > 60) { continue; }
 
           const L = 0.299 * R + 0.587 * G + 0.114 * B;
           const rb = R - B;
           const isWarm = (rb > 22 && R > 80);
           const isRed = (R > 85 && (R - G) > 45 && rb > 45);
 
+          patchValid[idx] = 1;
           patchW[idx] = isWarm ? 255 : 0;
           patchR[idx] = isRed ? 255 : 0;
 
@@ -545,9 +930,18 @@ class BoardRecognizer {
           // 之前只用 R-G>45，盘面 R-G=50 也被算成红字，导致黑子全被判成红子。
           const isRedInk = (R > 95 && G < 115 && (R - G) > 55 && (R - B) > 65);
           const isDarkInk = (L < 85) && !isRedInk;
+          patchI[idx] = (isRedInk || isDarkInk) ? 255 : 0;
           if (isRedInk || isDarkInk) ink++;
           if (isRedInk) redInk++;
           if (isDarkInk) darkInk++;
+          // 中心 8x8 单独统计墨迹：高亮圈的深色描边只落在极外圈，
+          // 全图统计会把它算成「黑墨」，于是刚走过的红仕被判成黑兵。
+          if (py >= 4 && py <= 11 && px >= 4 && px <= 11) {
+            coreN++;
+            if (isRedInk || isDarkInk) coreInk++;
+            if (isRedInk) coreRedInk++;
+            if (isDarkInk) coreDarkInk++;
+          }
         }
       }
     } else {
@@ -591,10 +985,17 @@ class BoardRecognizer {
       inkR: ink / denom,
       redInkR: redInk / denom,
       darkInkR: darkInk / denom,
+      // 中心区域（避开高亮圈）的墨迹占比 —— 判红黑用这个更准
+      inkCoreR: coreInk / (coreN || 1),
+      redInkCoreR: coreRedInk / (coreN || 1),
+      darkInkCoreR: coreDarkInk / (coreN || 1),
+      coreN,
       n,
       skipped,
       patchW,
-      patchR
+      patchR,
+      patchI,
+      patchValid
     };
   }
 
@@ -608,7 +1009,70 @@ class BoardRecognizer {
       out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch);
     }
     this.lastStats = { pts, cell, radius };
+    if (wantPatch && this.templates) {
+      this.refineLowConfidence(out, pixels, w, h, pts, cell, radius);
+    }
     return out;
+  }
+
+  /**
+   * 对「认不准的格子」做多尺度 + 多偏移的局部重采样
+   *
+   * 解决两类问题：
+   *   1. JJ象棋 落子瞬间会把刚走的棋子放大 1.25 倍、偏移十几像素
+   *      （那一帧模板分数只有 0.2，正常 1.3~2.7），红仕会被判成红兵；
+   *   2. 网格残余误差（格距差 1%，累积到第 9 行就有 6 像素）。
+   *
+   * 只对「看起来有子但分数低」的格子做，空格直接跳过，
+   * 所以正常情况几乎没有额外开销。
+   *
+   * @returns {number} 被修正的格子数
+   */
+  refineLowConfidence(stats, pixels, w, h, pts, cell, radius) {
+    let fixed = 0, budget = 14;
+    const OFFS = [-1, 0, 1];
+    const SCALES = [1.0, 1.16, 1.30];
+
+    for (let sq = 0; sq < 90 && budget > 0; sq++) {
+      const s = stats[sq];
+      if (!s || !s.patchW) continue;
+      // 明显是空格就别浪费预算
+      const warm = s.warmR || 0;
+      const inkCore = s.inkCoreR || 0;
+      if (warm < 0.24 && inkCore < 0.10) continue;
+
+      const m0 = this.matchCell(s);
+      if (m0.key !== 'E' && m0.score >= 0.55) continue;   // 已经很确定
+
+      budget--;
+      const cx = pts[sq * 2], cy = pts[sq * 2 + 1];
+      const off = cell * 0.09;
+      let bestStats = s, bestScore = (m0.key === 'E') ? -2 : m0.score;
+
+      for (let si = 0; si < SCALES.length; si++) {
+        const r = Math.max(3, Math.round(radius * SCALES[si]));
+        for (let dy = 0; dy < 3; dy++) {
+          for (let dx = 0; dx < 3; dx++) {
+            if (si === 0 && dx === 1 && dy === 1) continue;  // 原位置已经试过
+            const nx = cx + OFFS[dx] * off;
+            const ny = cy + OFFS[dy] * off;
+            const ns = this.sampleCell(pixels, w, h, nx, ny, r, true);
+            const nm = this.matchCell(ns);
+            if (nm.key !== 'E' && nm.score > bestScore) {
+              bestScore = nm.score;
+              bestStats = ns;
+            }
+          }
+        }
+      }
+
+      if (bestStats !== s && bestScore >= 0.55) {
+        stats[sq] = bestStats;
+        fixed++;
+      }
+    }
+    this.lastRefined = fixed;
+    return fixed;
   }
 
   /**
@@ -692,9 +1156,20 @@ class BoardRecognizer {
    * 比对的只是「中心区域的图案形状」，跟亮度、色调、边缘网格线无关
    */
   normalizePatch(patch) {
+    return this.normalizePatchW(patch, this.patchWeights);
+  }
+
+  /**
+   * 用指定权重做加权归一化。
+   *
+   * 模板训练时用全局 patchWeights；比对时用「按像素有效性过滤后」的权重，
+   * 这样高亮圈 / 绿点盖住的像素不会把兵种比对带偏。
+   * （高亮只在落子瞬间出现，但恰好是必须认准的那几帧。）
+   */
+  normalizePatchW(patch, weights) {
     const n = patch.length;
     if (!n) return null;
-    const w = (this.patchWeights && this.patchWeights.length === n) ? this.patchWeights : null;
+    const w = (weights && weights.length === n) ? weights : null;
 
     let sum = 0, sumW = 0;
     for (let i = 0; i < n; i++) {
@@ -730,7 +1205,7 @@ class BoardRecognizer {
       const vr = this.normalizePatch(s.patchR);
       if (!vw || !vr) continue;
       if (!buckets[key]) buckets[key] = [];
-      buckets[key].push({ w: vw, r: vr });
+      buckets[key].push({ w: vw, r: vr, i: s.patchI ? this.normalizePatch(s.patchI) : null });
     }
     this.templates = buckets;
     let total = 0;
@@ -749,35 +1224,63 @@ class BoardRecognizer {
    */
   matchCell(stats) {
     const PW = stats.patchW.length;
-    let warmCount = 0, redCount = 0;
+    const valid = stats.patchValid;
+    let warmCount = 0, redCount = 0, validCount = 0;
     for (let i = 0; i < PW; i++) {
+      if (valid && !valid[i]) continue;
+      validCount++;
       if (stats.patchW[i] > 0) warmCount++;
       if (stats.patchR[i] > 0) redCount++;
     }
-    const warmRatio = warmCount / PW;
+    const warmRatio = warmCount / (validCount || PW);
 
     // 暖色像素占比太低 → 一定是空棋盘，直接判空
     if (warmRatio < 0.18) return { key: 'E', score: warmRatio, warmRatio };
 
-    const vw = this.normalizePatch(stats.patchW);
-    const vr = this.normalizePatch(stats.patchR);
-    if (!vw || !vr || !this.templates) return { key: 'E', score: 0, warmRatio };
+    const n = PW;
+    // 按像素有效性过滤后的权重：高亮圈 / 绿点 / 白边占掉的格直接不参与比对
+    let wgt = null;
+    if (this.patchWeights && this.patchWeights.length === n) {
+      if (valid && validCount < n) {
+        wgt = new Float32Array(n);
+        let s = 0;
+        for (let i = 0; i < n; i++) {
+          const v = valid[i] ? this.patchWeights[i] : 0;
+          wgt[i] = v;
+          s += v;
+        }
+        if (s > 1e-6) {
+          for (let i = 0; i < n; i++) wgt[i] /= s;
+        } else {
+          wgt = this.patchWeights;
+        }
+      } else {
+        wgt = this.patchWeights;
+      }
+    }
 
-    const n = vw.length;
-    const wgt = (this.patchWeights && this.patchWeights.length === n) ? this.patchWeights : null;
+    const vw = this.normalizePatchW(stats.patchW, wgt);
+    const vr = this.normalizePatchW(stats.patchR, wgt);
+    const vi = stats.patchI ? this.normalizePatchW(stats.patchI, wgt) : null;
+    if (!vw || !vr || !this.templates) return { key: 'E', score: 0, warmRatio };
 
     let bestKey = 'E', best = -2;
     for (const key in this.templates) {
       const arr = this.templates[key];
       for (let t = 0; t < arr.length; t++) {
         const tpl = arr[t];
-        let dotW = 0, dotR = 0;
+        let dotW = 0, dotR = 0, dotI = 0;
         for (let i = 0; i < n; i++) {
           const wi = wgt ? wgt[i] : 1;
           dotW += wi * vw[i] * tpl.w[i];
           dotR += wi * vr[i] * tpl.r[i];
+          if (vi && tpl.i) dotI += wi * vi[i] * tpl.i[i];
         }
-        const score = dotW + dotR * 1.8;
+        // 三通道加权：暖色（盘面）+ 红色（红字）+ 墨迹（笔画形状）
+        // 只比暖色/红色时，馬 的模板对任何棋子都能拿到 1.1 分以上，
+        // 真正的車 反而只有 0.94，于是红俥被认成红傌（实测两格）。
+        // 笔画掩码直接比字形，車 和 馬 立刻分开。
+        const score = dotW + dotR * 1.8 + dotI * (tpl.i ? 2.6 : 0);
         if (score > best) { best = score; bestKey = key; }
       }
     }
@@ -820,10 +1323,17 @@ class BoardRecognizer {
       }
 
       // 2) 墨迹颜色定红黑；字被遮住时退回「红色占比」
+      //    优先用中心 8x8 的墨迹：外圈是「上一步」的高亮圈，
+      //    圈的深色描边会被算成黑墨，把刚走过的红仕判成黑兵（实测）。
       const redInkR = (typeof s.redInkR === 'number') ? s.redInkR : 0;
       const darkInkR = (typeof s.darkInkR === 'number') ? s.darkInkR : 0;
+      const coreInkR = (typeof s.inkCoreR === 'number') ? s.inkCoreR : 0;
+      const coreRedR = (typeof s.redInkCoreR === 'number') ? s.redInkCoreR : 0;
+      const coreDarkR = (typeof s.darkInkCoreR === 'number') ? s.darkInkCoreR : 0;
       let inkRed;
-      if (inkR >= inkTh) {
+      if (coreInkR >= 0.10) {
+        inkRed = coreRedR >= coreDarkR;
+      } else if (inkR >= inkTh) {
         inkRed = redInkR >= darkInkR;
       } else {
         inkRed = (s.redR || 0) > 0.012;
@@ -932,5 +1442,6 @@ class BoardRecognizer {
 module.exports = {
   BoardRecognizer, EMPTY, RED_PC, BLK_PC,
   bilinear, homography, applyH,
-  autoDetectBoard, findEvenlySpacedPeaks
+  autoDetectBoard, findEvenlySpacedPeaks,
+  refineByPieces, refineGrid, fitEvenLines, findPeaks1D
 };
