@@ -17,6 +17,7 @@ struct BroadcastPickerButton: UIViewRepresentable {
 
     final class Coordinator {
         var picker: RPSystemBroadcastPickerView?
+        var lastTrigger = 0
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -40,15 +41,15 @@ struct BroadcastPickerButton: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
-        // trigger 变化时程序化触发点击
-        guard trigger > 0 else { return }
+        // 只在 trigger 真的变了才触发一次，避免每次重绘都弹录屏面板
+        guard trigger != context.coordinator.lastTrigger else { return }
+        context.coordinator.lastTrigger = trigger
+        guard trigger > 0, let picker = context.coordinator.picker else { return }
         DispatchQueue.main.async {
-            if let picker = context.coordinator.picker {
-                for sub in picker.subviews {
-                    if let b = sub as? UIButton {
-                        b.sendActions(for: .allTouchEvents)
-                        break
-                    }
+            for sub in picker.subviews {
+                if let b = sub as? UIButton {
+                    b.sendActions(for: .allTouchEvents)
+                    break
                 }
             }
         }
@@ -241,14 +242,26 @@ struct ContentView: View {
 // MARK: - 给 PiP 用的锚点视图
 
 struct AnchorView: UIViewRepresentable {
+
     @Binding var view: UIView
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var installed = false
+    }
+
     func makeUIView(context: Context) -> UIView {
         let v = UIView()
         v.backgroundColor = .clear
         DispatchQueue.main.async { self.view = v }
         return v
     }
+
     func updateUIView(_ uiView: UIView, context: Context) {
+        // 只回传一次，避免「改 @State → 触发 updateUIView → 再改」的无限循环
+        guard !context.coordinator.installed else { return }
+        context.coordinator.installed = true
         DispatchQueue.main.async { self.view = uiView }
     }
 }
