@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T14:29:34.887Z
+ *  生成时间: 2026-10-29T14:34:10.986Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2249,7 +2249,7 @@ function refineByPieces(pixels, w, h, corners) {
     const ratio = cw / ch;
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
-    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
     if (r.hits < 6) return;
     if (r.usable < 40) return;
     const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
@@ -2273,7 +2273,7 @@ function refineByPieces(pixels, w, h, corners) {
   {
     const sd = seeds[0];
     const rr = Math.min(sd.cw, sd.ch) * 0.30;
-    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, skipRect);
+    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, null);
     // 只有「浮窗真的压到棋盘」时才锁先验。
     // 没遮挡的画面里完整搜索更准（能吃到 0.1% 的格距差异）；
     // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
@@ -2292,7 +2292,7 @@ function refineByPieces(pixels, w, h, corners) {
             for (let b = -1; b <= 1; b++) {
               const x0 = sd.x0 + a * oS * sd.cw;
               const y0 = sd.y0 + b * oS * sd.ch;
-              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
+              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
               if (r.usable < 40) continue;
               // 只有明显更好（多命中 2 个以上）才离开先验
               if (r.hits >= pick.hits + 2) {
@@ -3094,45 +3094,6 @@ class BoardRecognizer {
     let hiddenCount = 0;
     let tplFail = 0;
 
-    // 先用「像素直接证据」确认浮窗真的存在：有几个格子是纯米黄无墨。
-    // 只有确认了，才允许用浮窗矩形去补其它被盖住的格子（浮窗右侧深色文字面板
-    // 那几格像素上不是米黄，只能靠矩形补）。矩形框错时不会误伤正常格子。
-    //
-    // 而且这些格子必须连成一片（>=3 格）：一个带高亮圈的棋子有可能某一帧被算成
-    // 「纯米黄无墨」（圈把字形遮住、圈像素又被过滤掉），但它只会是孤立一格；
-    // 自己的浮窗棋盘一定是整块连着的。
-    const beigeMask = new Uint8Array(90);
-    for (let sq0 = 0; sq0 < 90; sq0++) {
-      const s0 = stats[sq0];
-      if (!s0) continue;
-      if ((s0.warmR || 0) > 0.93 && (s0.inkR || 0) < 0.06) beigeMask[sq0] = 1;
-    }
-    const beigeKeep = new Uint8Array(90);
-    const beigeSeen = new Uint8Array(90);
-    {
-      const st = [];
-      for (let s0 = 0; s0 < 90; s0++) {
-        if (!beigeMask[s0] || beigeSeen[s0]) continue;
-        st.length = 0;
-        st.push(s0);
-        beigeSeen[s0] = 1;
-        const comp = [];
-        while (st.length) {
-          const p = st.pop();
-          comp.push(p);
-          const r0 = (p / 9) | 0, c0 = p % 9;
-          if (c0 > 0 && beigeMask[p - 1] && !beigeSeen[p - 1]) { beigeSeen[p - 1] = 1; st.push(p - 1); }
-          if (c0 < 8 && beigeMask[p + 1] && !beigeSeen[p + 1]) { beigeSeen[p + 1] = 1; st.push(p + 1); }
-          if (r0 > 0 && beigeMask[p - 9] && !beigeSeen[p - 9]) { beigeSeen[p - 9] = 1; st.push(p - 9); }
-          if (r0 < 9 && beigeMask[p + 9] && !beigeSeen[p + 9]) { beigeSeen[p + 9] = 1; st.push(p + 9); }
-        }
-        if (comp.length >= 3) for (let k = 0; k < comp.length; k++) beigeKeep[comp[k]] = 1;
-      }
-    }
-    let beigeCount = 0;
-    for (let i = 0; i < 90; i++) beigeCount += beigeKeep[i];
-    const rectTrusted = (beigeCount >= 3) && !!this.pipRect;
-
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
       if (!s || !s.patchW) { grid[sq] = EMPTY; codes[sq] = 0; continue; }
@@ -3145,36 +3106,12 @@ class BoardRecognizer {
       const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
       const warmR = (typeof s.warmR === 'number') ? s.warmR : 0;
 
-      // ★ 被自己的画中画盖住的格子
-      //   抓屏会把画中画窗口一起抓进去（实测 PiP 压住右上角时，
-      //   那几个格子的暖色占比是 100%、墨迹 0% —— 那是浮窗里的米黄棋盘）。
-      //   这种格子完全没有棋子的信息，必须判「未知」而不是硬判成棋子，
-      //   否则会凭空造出七八个卒，把整盘 FEN 搞成垃圾。
-      //
-      // 【两级判据，先严后宽】
-      //   一级 = 像素直接证据：暖色占比 > 93% 且几乎没有墨 → 只可能是自己的浮窗
-      //   二级 = 浮窗矩形：把浮窗深色文字面板盖住的那几格也补上
-      //   但二级必须「一级先成立」才允许用 —— 否则一旦矩形框错了，
-      //   就会把本来认得对的格子直接抹成空，整盘崩掉（实测误报就是这么来的）。
-      const beigeNow = (beigeKeep[sq] === 1);
-
-      const pr = this.pipRect;
-      let inPip = false;
-      if (pr) {
-        const lc = this.lastStats;
-        if (lc && lc.pts) {
-          const px = lc.pts[sq * 2], py = lc.pts[sq * 2 + 1], pad = lc.cell * 0.35;
-          inPip = (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad);
-        }
-      }
-      if (beigeNow || (inPip && rectTrusted)) {
-        grid[sq] = EMPTY;
-        codes[sq] = 0;
-        conf[sq] = 0;
-        hidden[sq] = 1;
-        hiddenCount++;
-        continue;
-      }
+      // 【遮挡判定已彻底移除】
+      //   曾经写过「自己的画中画盖住棋盘就把那几格判成未知」的逻辑，
+      //   但画中画矩形是靠颜色猜的，界面上其它米黄区域会让它跑偏，
+      //   于是没挡住也报警、还把那几格真棋子抹掉，整盘直接崩。
+      //   画中画会占掉棋盘格子这件事，已经从根上解决（浮窗改成横版 320x180，
+      //   系统无论摆右上还是右下都不会碰到棋盘），所以这段判据没有存在的必要。
 
       const hasInk = (inkR >= inkTh);
       const hasFace = (warmR >= 0.28);
@@ -4108,11 +4045,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 自己的画中画是否真的盖住了棋盘的格子。
-      // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
-      // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
-      pipOverlap: ((cls.hiddenCount || 0) >= 3) ? 1 : 0,
-      hiddenCells: (cls.hiddenCount || 0)
+      // 遮挡提示已彻底移除：判定靠颜色猜浮窗位置，会误报、还会把正常格子抹成空。
+      // 字段保留为 0，App 端不会再显示任何「浮窗挡住棋盘」的提示，也不会因此冻结局面。
+      pipOverlap: 0,
+      hiddenCells: 0
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN
@@ -4145,10 +4081,7 @@ var JJEngine = {
     //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
     //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
     var firstLatch = !session.lastBoardFen;
-    // 有格子被自己的浮窗盖住时不更新局面 —— 残缺盘面算出来的着法一定是错的。
-    // 保留上一局面 + 在浮窗上提示把浮窗拖开，比给一个错着法好。
-    var occluded = ((cls.hiddenCount || 0) >= 3);
-    if (!occluded && (firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
+    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
       // 局面更新限流：最多每 350ms 换一次。（原来 700ms，落子后光这道闸就要多等半秒）
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
