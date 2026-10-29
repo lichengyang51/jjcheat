@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T11:12:56.099Z
+ *  生成时间: 2026-10-29T11:55:10.819Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1541,25 +1541,30 @@ class BoardRecognizer {
     return pts;
   }
 
-  /** 格距估算（像素） */
+  /**
+   * 格距估算（像素）
+   *
+   * 【历史 bug】原来写成 hypot(pts[2]-pts[0], pts[3]-pts[1]) / 8，
+   * 但 pts[0] 与 pts[2] 是「r0c0」和「r0c1」两个相邻交叉点，
+   * 它们的距离本来就等于一个格宽，再除以 8 会让采样半径缩到 1/8
+   * （约 2.5 像素），只采到棋子正中心那一点，什么都判不出来。
+   */
   cellSize(pts) {
     const dx = pts[2] - pts[0];
     const dy = pts[3] - pts[1];
-    return Math.hypot(dx, dy) / 8;
+    return Math.hypot(dx, dy);
   }
 
   /**
    * 采样一个交叉点周围的特征
-   * @returns {{meanL, redR, darkR, brightR, n, patch:Uint8Array|null}}
+   * @returns {{meanL, redR, darkR, brightR, warmR, n, patch}}
    */
   sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
-    let n = 0, sumL = 0, red = 0, dark = 0, bright = 0;
-    // 环带：跳过最中心（那里可能被上一帧的箭头/高亮遮挡）
+    let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0;
     const step = Math.max(1, Math.floor(radius / 4));
     const r2 = radius * radius;
     const inner = (radius * 0.18) * (radius * 0.18);
 
-    // 灰度 patch（16x16）用于模板
     const PW = 16;
     const patch = wantPatch ? new Uint8Array(PW * PW) : null;
     const pw = wantPatch ? (radius * 2) / PW : 0;
@@ -1575,10 +1580,13 @@ class BoardRecognizer {
         const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
         const L = 0.299 * R + 0.587 * G + 0.114 * B;
         sumL += L; n++;
-        if (R > 85 && (R - G) > 45 && (R - B) > 45) red++;
+        const rb = R - B;
+        if (R > 85 && (R - G) > 45 && rb > 45) red++;
         if (L < 72) dark++;
         if (L > 178) bright++;
-        if (d2 >= inner) { /* 全部计入 */ }
+        // 暖色度：棋子盘面是棕黄（R 明显高于 B），棋盘是灰绿（R≈B 或偏低）
+        // 这是比绝对亮度可靠得多的判据
+        if (rb > 26 && R > 85) warm++;
 
         if (wantPatch) {
           const px = Math.min(PW - 1, Math.max(0, Math.floor((dx + radius) / pw)));
@@ -1587,12 +1595,13 @@ class BoardRecognizer {
         }
       }
     }
-    if (n === 0) return { meanL: 0, redR: 0, darkR: 0, brightR: 0, n: 0, patch };
+    if (n === 0) return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, patch };
     return {
       meanL: sumL / n,
       redR: red / n,
       darkR: dark / n,
       brightR: bright / n,
+      warmR: warm / n,
       n,
       patch
     };
@@ -1612,28 +1621,77 @@ class BoardRecognizer {
   }
 
   /**
-   * 从已知空位学习背景模型
+   * 用「双峰自动分割」学背景，不依赖「哪些格子是空的」这个先验。
+   *
+   * 原来靠开局 58 个空位采样，一旦画面不是开局就学错，还会污染模型。
+   * 现在直接把 90 个格子的暖色度做直方图，用 Otsu 找最佳分割点：
+   * 空棋盘（冷色）和有棋子（暖色）自然会分成两簇。
+   *
    * @param {Array} stats sampleAll 的结果
-   * @param {number[]} emptySquares 已知为空的格子
+   * @param {number[]} emptySquares 兼容旧调用，现在不依赖它
    */
   learnBackground(stats, emptySquares) {
-    const vals = emptySquares.map(sq => stats[sq]).filter(s => s && s.n > 0);
-    if (!vals.length) return null;
-    const mean = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
-    const std = (arr, m) => Math.sqrt(arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length);
-    const Ls = vals.map(v => v.meanL);
-    const Rs = vals.map(v => v.redR);
-    const Ds = vals.map(v => v.darkR);
-    const Bs = vals.map(v => v.brightR);
-    const mL = mean(Ls), sL = Math.max(3, std(Ls, mL));
-    const mR = mean(Rs), sR = Math.max(0.004, std(Rs, mR));
-    const mD = mean(Ds), sD = Math.max(0.004, std(Ds, mD));
-    const mB = mean(Bs), sB = Math.max(0.01, std(Bs, mB));
+    const vals = [];
+    for (let i = 0; i < stats.length; i++) {
+      const s = stats[i];
+      if (s && s.n > 0) vals.push(s.warmR);
+    }
+    if (vals.length < 10) return null;
+
+    // ---- Otsu 双峰分割 ----
+    const BINS = 64;
+    const hist = new Array(BINS).fill(0);
+    for (let i = 0; i < vals.length; i++) {
+      let b = Math.round(vals[i] * (BINS - 1));
+      if (b < 0) b = 0;
+      if (b >= BINS) b = BINS - 1;
+      hist[b]++;
+    }
+    const total = vals.length;
+    let sumAll = 0;
+    for (let i = 0; i < BINS; i++) sumAll += i * hist[i];
+
+    let wB = 0, sumB = 0, maxVar = -1, bestBin = 0;
+    for (let i = 0; i < BINS; i++) {
+      wB += hist[i];
+      if (wB === 0) continue;
+      const wF = total - wB;
+      if (wF === 0) break;
+      sumB += i * hist[i];
+      const mB = sumB / wB;
+      const mF = (sumAll - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > maxVar) { maxVar = between; bestBin = i; }
+    }
+
+    let th = bestBin / (BINS - 1);
+    // 阈值落在极端值说明画面里几乎全空或全满，给个保守默认
+    if (th < 0.02 || th > 0.60) th = Math.max(0.06, Math.min(0.35, th || 0.15));
+
+    // 红/黑判据的分布（相对量，不看绝对值）
+    const reds = [], darks = [];
+    for (let i = 0; i < stats.length; i++) {
+      const s = stats[i];
+      if (!s || s.n === 0) continue;
+      reds.push(s.redR);
+      darks.push(s.darkR);
+    }
+    const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+
     this.bgModel = {
-      meanL: mL, stdL: sL,
-      meanRed: mR, stdRed: sR,
-      meanDark: mD, stdDark: sD,
-      meanBright: mB, stdBright: sB
+      warmThreshold: th,
+      meanWarm: avg(vals),
+      meanRed: avg(reds),
+      meanDark: avg(darks),
+      // 保留旧字段，别的代码可能还在读
+      meanL: 0,
+      stdL: 1,
+      meanBright: 0,
+      stdBright: 1,
+      meanRedRaw: avg(reds),
+      stdRed: 0.01,
+      meanDarkRaw: avg(darks),
+      stdDark: 0.01
     };
     return this.bgModel;
   }
@@ -1654,51 +1712,39 @@ class BoardRecognizer {
 
   /**
    * 三分类：返回 Int8Array(90)，0=空 1=红 2=黑
-   * 依赖 this.bgModel；若无模型则用绝对阈值兜底
+   *
+   * 有子：只看「暖色度」（棋子是棕黄盘面，棋盘是灰绿底），
+   *       阈值由 learnBackground 的 Otsu 双峰自动给出。
+   * 红黑：只看「红色像素占比」。
+   *       曾经同时比 darkR，结果红字 (168,28,28) 的亮度算出来是 69.8，
+   *       低于深色阈值 72，红字被同时算成「红」和「深」，最后反投给黑方。
+   *       黑字永远不会发红，所以只看红就够了。
    */
   classify(stats, opts) {
     const o = Object.assign({
-      occBrightR: 0.16,  // 亮色占比达到此值 → 有子
-      occDeltaL: 16,     // 或与背景亮度差超过此值
-      redTh: 0.030,      // 红色字占比 → 红子
-      darkTh: 0.045,     // 深色字占比 → 黑子
-      confTh: 0.02
+      warmTh: 0.20,
+      redTh: 0.012,
     }, opts || {});
 
     const bg = this.bgModel;
+    const warmTh = bg && typeof bg.warmThreshold === 'number' ? bg.warmThreshold : o.warmTh;
+
     const grid = new Int8Array(90);
     const conf = new Float32Array(90);
+    const reds = new Float32Array(90);
 
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
       if (!s || s.n === 0) { grid[sq] = EMPTY; continue; }
 
-      let occupied;
-      if (bg) {
-        const dL = Math.abs(s.meanL - bg.meanL);
-        const dBr = s.brightR - bg.meanBright;
-        const scoreOcc = (dBr / o.occBrightR) * 0.6 + (dL / o.occDeltaL) * 0.4;
-        occupied = scoreOcc > 1.0;
-        conf[sq] = scoreOcc;
-      } else {
-        occupied = s.brightR > o.occBrightR || s.meanL > 190;
-        conf[sq] = s.brightR / o.occBrightR;
-      }
+      const occupied = s.warmR >= warmTh;
+      conf[sq] = warmTh > 0 ? s.warmR / warmTh : 0;
+      reds[sq] = s.redR;
 
       if (!occupied) { grid[sq] = EMPTY; continue; }
-
-      // 有子 → 判红/黑
-      const isRed = s.redR > o.redTh;
-      const isBlk = s.darkR > o.darkTh;
-      if (isRed && !isBlk) grid[sq] = RED_PC;
-      else if (isBlk && !isRed) grid[sq] = BLK_PC;
-      else if (isRed && isBlk) grid[sq] = s.redR > s.darkR ? RED_PC : BLK_PC;
-      else {
-        // 字迹太淡：用背景对比兜底 —— 落在红子模板均值附近就判红
-        grid[sq] = s.redR >= s.darkR ? RED_PC : BLK_PC;
-      }
+      grid[sq] = (s.redR > o.redTh) ? RED_PC : BLK_PC;
     }
-    return { grid, conf };
+    return { grid, conf, reds };
   }
 
   /** 模板 SAD 匹配，用于歧义消解：返回与给定 patch 最相似的模板 key */
@@ -2062,17 +2108,19 @@ var JJEngine = {
       ok = false;
     }
 
-    if (!ok) {
-      // 回滚，保持干净状态
-      session.recognizer.bgModel = backupBg;
-      session.recognizer.templates = backupTpl;
-    }
+    // 不再回滚：新算法用「暖色度双峰自适应」，即便画面不是标准开局，
+    // 学到的阈值本身依然有效（Otsu 不需要知道哪些格子是空的）。
+    // verifyDiff 只作为诊断信息返回，用来提示画面是否为标准开局。
+    var learned = session.recognizer.bgModel ? 1 : 0;
+    var warmTh = session.recognizer.bgModel ? session.recognizer.bgModel.warmThreshold : -1;
 
     return {
-      bgMeanL: session.recognizer.bgModel ? session.recognizer.bgModel.meanL : -1,
+      learned: learned,
+      warmThreshold: warmTh,
       templateCount: session.recognizer.templates ? session.recognizer.templates.length : 0,
       verifyDiff: verifyDiff,
-      ok: ok
+      ok: ok,
+      isOpening: ok
     };
   },
 

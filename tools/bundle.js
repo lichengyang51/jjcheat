@@ -171,17 +171,19 @@ var JJEngine = {
       ok = false;
     }
 
-    if (!ok) {
-      // 回滚，保持干净状态
-      session.recognizer.bgModel = backupBg;
-      session.recognizer.templates = backupTpl;
-    }
+    // 不再回滚：新算法用「暖色度双峰自适应」，即便画面不是标准开局，
+    // 学到的阈值本身依然有效（Otsu 不需要知道哪些格子是空的）。
+    // verifyDiff 只作为诊断信息返回，用来提示画面是否为标准开局。
+    var learned = session.recognizer.bgModel ? 1 : 0;
+    var warmTh = session.recognizer.bgModel ? session.recognizer.bgModel.warmThreshold : -1;
 
     return {
-      bgMeanL: session.recognizer.bgModel ? session.recognizer.bgModel.meanL : -1,
+      learned: learned,
+      warmThreshold: warmTh,
       templateCount: session.recognizer.templates ? session.recognizer.templates.length : 0,
       verifyDiff: verifyDiff,
-      ok: ok
+      ok: ok,
+      isOpening: ok
     };
   },
 

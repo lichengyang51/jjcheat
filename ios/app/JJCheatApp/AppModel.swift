@@ -200,32 +200,36 @@ final class AppModel: ObservableObject {
         guard !busy else { return }
         busy = true
 
-        // 学习阶段：必须是标准开局画面，且学完要验证。
-        // 学不到就降级启动，绝不让用户卡死在这里。
+        // 学习阶段：新算法用暖色度双峰自适应，不再要求画面必须是标准开局。
+        // 校验结果只用来提示「当前是不是开局」，不再作为成功/失败的门槛。
         if !learned {
             learnAttempts += 1
             if learnAttempts % 5 == 1 {
                 if let info = JJEngine.shared.learnBoard(pixels: frame.data,
                                                          width: frame.width,
                                                          height: frame.height),
-                   JJEngine.bool(info, "ok") {
+                   JJEngine.int(info, "learned") == 1 {
                     learned = true
                     UserDefaults.standard.set(true, forKey: learnedKey)
+                    let warmTh = JJEngine.double(info, "warmThreshold", -1)
                     let diff = JJEngine.int(info, "verifyDiff", -1)
-                    status = "棋盘学习完成（校验 \(diff) 格误差），点「③ 打开画中画」"
-                    NSLog("[JJCheat] learnBoard ok diff=%d", diff)
+                    if JJEngine.bool(info, "isOpening") {
+                        status = String(format: "棋盘已学习（暖色阈值 %.2f，开局校验 %.0f 格误差）", warmTh, Double(diff))
+                    } else {
+                        status = String(format: "棋盘已学习（暖色阈值 %.2f）· 当前画面非标准开局，请开一局新棋才能从开局往后推局面", warmTh)
+                    }
+                    NSLog("[JJCheat] learnBoard ok warmTh=%f verifyDiff=%d", warmTh, diff)
                     refreshHUD()
                 } else {
-                    status = "等开局：把画面停在标准开局，等 3 秒"
+                    status = "正在学习棋盘…"
                 }
             }
-            // 降级兜底：一直学不到就清空错误的模型、退回默认阈值跑，别卡死
+            // 兜底：一直学不到就直接跑，绝不让用户卡死
             if !learned && learnAttempts > learnGiveUpAfter {
                 learned = true
-                JJEngine.shared.skipLearning()     // 关键：清掉中局误学出来的脏模型
                 UserDefaults.standard.set(true, forKey: learnedKey)
-                status = "当前画面不是标准开局，已退回默认参数启动。识别可能不准 —— 想准确请先开一局新棋，再点「重新学习棋盘」"
-                NSLog("[JJCheat] learnBoard 超时，退回默认阈值")
+                status = "学习超时，已用默认阈值启动。若识别不准请重新校准（四点必须落在棋格交叉点）"
+                NSLog("[JJCheat] learnBoard 超时")
                 refreshHUD()
             }
             busy = false
