@@ -71,7 +71,7 @@ final class JJEngine {
         queue.sync {
             guard let ctx, let arr = makeTypedArray(pixels, width: width, height: height) else { return }
             let res = ctx["JJEngine"]["learnBoard"].call(withArguments: [arr, width, height])
-            out = res?.toDictionary() as? [String: Any]
+            out = Self.dict(res)
         }
         return out
     }
@@ -85,9 +85,50 @@ final class JJEngine {
             guard let ctx, let arr = makeTypedArray(pixels, width: width, height: height) else { return }
             let opts: [String: Any] = ["timeMs": timeMs, "maxDiff": 1]
             let res = ctx["JJEngine"]["process"].call(withArguments: [arr, width, height, opts])
-            out = res?.toDictionary() as? [String: Any]
+            out = Self.dict(res)
         }
         return out
+    }
+
+    /// JSObject -> [String: Any]，逐键做类型归一，避免 as? 桥接失败
+    static func dict(_ value: JSValue?) -> [String: Any]? {
+        guard let value, !value.isUndefined, !value.isNull else { return nil }
+        guard let raw = value.toDictionary() else { return nil }
+        var out: [String: Any] = [:]
+        for (k, v) in raw {
+            guard let key = k as? String else { continue }
+            out[key] = v
+        }
+        return out.isEmpty ? nil : out
+    }
+
+    /// 安全的数值读取
+    static func int(_ d: [String: Any]?, _ key: String, _ def: Int = 0) -> Int {
+        guard let v = d?[key] else { return def }
+        if let n = v as? NSNumber { return n.intValue }
+        if let s = v as? String { return Int(s) ?? def }
+        return def
+    }
+
+    static func double(_ d: [String: Any]?, _ key: String, _ def: Double = 0) -> Double {
+        guard let v = d?[key] else { return def }
+        if let n = v as? NSNumber { return n.doubleValue }
+        if let s = v as? String { return Double(s) ?? def }
+        return def
+    }
+
+    static func str(_ d: [String: Any]?, _ key: String, _ def: String = "") -> String {
+        guard let v = d?[key] else { return def }
+        if let s = v as? String { return s }
+        if let n = v as? NSNumber { return n.stringValue }
+        return def
+    }
+
+    static func bool(_ d: [String: Any]?, _ key: String, _ def: Bool = false) -> Bool {
+        guard let v = d?[key] else { return def }
+        if let n = v as? NSNumber { return n.boolValue }
+        if let b = v as? Bool { return b }
+        return def
     }
 
     func currentFen() -> String {

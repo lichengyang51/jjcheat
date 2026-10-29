@@ -13,6 +13,17 @@ settings:
     ENABLE_BITCODE: NO
     ONLY_ACTIVE_ARCH: NO
 
+schemes:
+  JJCheatApp:
+    build:
+      targets:
+        JJCheatApp: all
+        JJCheatBroadcast: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+
 targets:
   JJCheatApp:
     type: application
@@ -22,6 +33,7 @@ targets:
         excludes:
           - "Info.plist"
           - "*.entitlements"
+          - "Resources/**"
       - path: Shared
     resources:
       - path: JJCheatApp/Resources
@@ -31,15 +43,11 @@ targets:
         CFBundleDisplayName: JJCheat
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
-        UILaunchScreen:
-          UIColorName: ""
+        UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: 本机回环通信，用于接收屏幕录制帧
-        NSBonjourServices:
-          - _jjcheat._tcp
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

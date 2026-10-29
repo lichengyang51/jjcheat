@@ -6,20 +6,26 @@ on:
     paths:
       - 'ios/app/**'
       - 'src/**'
+      - 'dist/**'
       - '.github/workflows/build-ios-app.yml'
 
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 40
     steps:
       - name: 取代码
         uses: actions/checkout@v4
 
       - name: 查看 Xcode 版本
-        run: xcodebuild -version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: 安装 XcodeGen
-        run: brew install xcodegen
+        run: |
+          brew install xcodegen
+          xcodegen --version
 
       - name: 打包引擎脚本
         run: |
@@ -33,41 +39,36 @@ jobs:
           cd ios/app
           xcodegen generate
           ls -la
+          ls -la JJCheat.xcodeproj || true
 
-      - name: 编译（免签名 archive）
+      - name: 编译（免签名）
         run: |
           cd ios/app
+          set -o pipefail
           xcodebuild \
             -project JJCheat.xcodeproj \
             -scheme JJCheatApp \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$RUNNER_TEMP/JJCheat.xcarchive" \
-            archive \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=NO \
-            | xcpretty || xcodebuild \
-              -project JJCheat.xcodeproj \
-              -scheme JJCheatApp \
-              -configuration Release \
-              -sdk iphoneos \
-              -archivePath "$RUNNER_TEMP/JJCheat.xcarchive" \
-              archive \
-              CODE_SIGN_IDENTITY="" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              ONLY_ACTIVE_ARCH=NO
+            build
 
       - name: 打未签名 ipa
         run: |
+          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name "JJCheatApp.app" -maxdepth 3 | head -1)
+          echo "app = $APP"
+          test -d "$APP"
           cd "$RUNNER_TEMP"
           rm -rf Payload JJCheat-unsigned.ipa
           mkdir -p Payload
-          cp -R "JJCheat.xcarchive/Products/Applications/JJCheatApp.app" Payload/
+          cp -R "$APP" Payload/
           zip -qry JJCheat-unsigned.ipa Payload
-          unzip -l JJCheat-unsigned.ipa | head -40
+          ls -la JJCheat-unsigned.ipa
+          unzip -l JJCheat-unsigned.ipa | head -30
 
       - name: 上传 ipa
         uses: actions/upload-artifact@v4
@@ -75,3 +76,4 @@ jobs:
           name: JJCheat-ipa
           path: ${{ runner.temp }}/JJCheat-unsigned.ipa
           if-no-files-found: error
+          retention-days: 30
