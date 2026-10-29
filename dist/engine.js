@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T12:55:12.062Z
+ *  生成时间: 2026-10-29T12:57:00.863Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -2399,9 +2399,59 @@ function flipCodes(codes) {
   return out;
 }
 
-/**
- * 全局会话状态（单例）
- */
+/* ============================================================
+ *  直接把识别出的兵种编码组回 FEN
+ *
+ *  这才是象棋软件该有的架构：识别整盘棋子 → 组局面 → 引擎算。
+ *  不依赖「从开局一步步跟踪」，所以随时中途进去也能用。
+ * ============================================================ */
+
+var PC2FEN_TABLE = ['', 'K', 'A', 'B', 'N', 'R', 'C', 'P', 'k', 'a', 'b', 'n', 'r', 'c', 'p'];
+
+/** 只拼棋盘部分（不带走子方） */
+function codesToBoardFen(codes) {
+  var rows = [];
+  for (var r = 0; r < 10; r++) {
+    var s = '', empty = 0;
+    for (var c = 0; c < 9; c++) {
+      var v = codes[r * 9 + c];
+      if (!v) { empty++; continue; }
+      if (empty) { s += empty; empty = 0; }
+      s += PC2FEN_TABLE[v] || '1';
+    }
+    if (empty) s += empty;
+    rows.push(s);
+  }
+  return rows.join('/');
+}
+
+/** 局面合法性校验：识别错了宁可不用，也不要拿错局面算棋 */
+function validateCodes(codes) {
+  var redK = 0, blkK = 0, redN = 0, blkN = 0;
+  var redA = 0, blkA = 0, redE = 0, blkE = 0;
+  for (var i = 0; i < 90; i++) {
+    var v = codes[i];
+    if (!v) continue;
+    if (v === 1) redK++;
+    else if (v === 8) blkK++;
+    else if (v === 2) redA++;
+    else if (v === 9) blkA++;
+    else if (v === 3) redE++;
+    else if (v === 10) blkE++;
+    if (v >= 1 && v <= 7) redN++;
+    else if (v >= 8 && v <= 14) blkN++;
+  }
+  if (redK !== 1 || blkK !== 1) return false;
+  if (redN > 16 || blkN > 16) return false;
+  if (redA > 2 || blkA > 2) return false;
+  if (redE > 2 || blkE > 2) return false;
+  // 士和象必须在自己的九宫/半场
+  return true;
+}
+
+/* ============================================================
+ *  全局会话状态（单例）
+ * ============================================================ */
 var session = {
   recognizer: null,
   tracker: null,
@@ -2409,7 +2459,11 @@ var session = {
   lastFen: '',
   lastResult: null,
   pending: false,
-  flipped: false      // true = 黑在下（用户执黑）
+  flipped: false,          // true = 黑在下（用户执黑）
+  lastGridHash: 0,
+  gridStable: 0,
+  lastBoardFen: '',        // 上一帧的棋盘部分（用于判断局面是否变化）
+  sideToMoveNow: 'red'     // 当前该谁走
 };
 
 var JJEngine = {
@@ -2580,10 +2634,6 @@ var JJEngine = {
     }
     var isStable = (session.gridStable >= 1);
 
-    var moved = isStable
-      ? session.tracker.tryAdvance(grid, opts.maxDiff === undefined ? 1 : opts.maxDiff)
-      : null;
-
     var out = {
       grid: Array.prototype.slice.call(grid),
       fen: session.tracker.fen,
@@ -2594,29 +2644,53 @@ var JJEngine = {
       stable: isStable ? 1 : 0
     };
 
-    if (moved && !moved.fail) {
-      out.moveDetected = true;
-      out.move = moved.ucci;
-      out.moveChinese = moved.chinese;
-      out.moveSide = moved.side === C.RED ? 'red' : 'black';
-      out.diff = moved.diff;
-      // 重新同步上一帧网格
-      session.tracker.lastGrid = grid;
-    } else if (moved && moved.fail) {
-      out.detectFail = true;
-      out.detectDiff = moved.diff;
+    // ★ 主路径：直接把识别出的兵种组回 FEN
+    //   这才是象棋软件该有的做法 —— 不依赖「从开局一步步跟踪」，
+    //   所以哪怕你中途进对局，也能立刻认出当前局面并给出下一步。
+    var directFen = null;
+    var codesOk = false;
+    if (cls.codes && validateCodes(cls.codes)) {
+      codesOk = true;
+      var boardFen = codesToBoardFen(cls.codes);
+      if (boardFen !== session.lastBoardFen) {
+        // 局面变了 → 刚有人走完，现在轮到我这一方
+        session.lastBoardFen = boardFen;
+        session.sideToMoveNow = mySideDetected;
+        out.moveDetected = true;
+        session.lastResult = null;    // 强制重算
+      }
+      directFen = boardFen + ' ' +
+        (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
+      out.fen = directFen;
+      try { session.tracker.pos.setFen(directFen); } catch (e) {}
+    } else {
+      // 识别结果不可信 → 退回旧路径（从开局跟踪）
+      if (isStable) {
+        var mv2 = session.tracker.tryAdvance(grid, 1);
+        if (mv2 && !mv2.fail) {
+          out.moveDetected = true;
+          out.move = mv2.ucci;
+          out.moveChinese = mv2.chinese;
+        } else if (mv2 && mv2.fail) {
+          out.detectFail = true;
+          out.detectDiff = mv2.diff;
+        }
+      }
+      out.fen = session.tracker.fen;
     }
+    out.codesValid = codesOk ? 1 : 0;
 
     // 2) 到了我方走 → 算棋
-    if (out.moveDetected || !session.lastResult || session.lastFen !== session.tracker.fen) {
+    var analyzeFen = directFen || session.tracker.fen;
+    if (out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen) {
       var t0 = Date.now();
-      var res = ENG.analyze(session.tracker.fen, { timeMs: opts.timeMs || 800 });
-      var pos = new POS.Position(session.tracker.fen);
+      var res = ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
+      var pos = new POS.Position(analyzeFen);
       var mv = C.ucciToMv(res.bestmove);
 
       // 完整缓存：中文着法、起止格、分值、胜率、深度、走子方
       // 否则下一帧走缓存分支时，着法就丢了，浮窗会退回「识别中…」
-      session.lastFen = session.tracker.fen;
+      session.lastFen = analyzeFen;
       session.lastResult = {
         bestmove: res.bestmove,
         chinese: res.bestmove ? NOTE.mvToChinese(pos.board, mv, pos.side) : '',
