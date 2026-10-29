@@ -56,7 +56,7 @@ class MoveTracker {
     // 同一个走法连续被检测到 confirmFrames 次才真正落子。
     this.pendingMove = 0;
     this.pendingCount = 0;
-    this.confirmFrames = 2;
+    this.confirmFrames = 3;
   }
 
   get fen() { return this.pos.getFen(); }

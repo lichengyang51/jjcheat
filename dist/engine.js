@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T12:29:40.960Z
+ *  生成时间: 2026-10-29T12:55:12.062Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -2154,7 +2154,7 @@ class MoveTracker {
     // 同一个走法连续被检测到 confirmFrames 次才真正落子。
     this.pendingMove = 0;
     this.pendingCount = 0;
-    this.confirmFrames = 2;
+    this.confirmFrames = 3;
   }
 
   get fen() { return this.pos.getFen(); }
@@ -2432,6 +2432,8 @@ var JJEngine = {
     session.tracker = new TRK.MoveTracker(fen || C.START_FEN);
     session.lastFen = session.tracker.fen;
     session.lastResult = null;
+    session.lastGridHash = 0;
+    session.gridStable = 0;
     return session.tracker.fen;
   },
 
@@ -2561,7 +2563,26 @@ var JJEngine = {
     var bottomBlack = mySideDetected === 'black' ? 1 : 0;
 
     // 1) 尝试推进一步棋
-    var moved = session.tracker.tryAdvance(grid, opts.maxDiff === undefined ? 1 : opts.maxDiff);
+    // ★ 画面稳定性检测
+    //   落子动画、高亮圈闪烁会让同一局面在相邻帧里识别出不同结果，
+    //   如果每帧都拿去匹配走法，tracker 会被误判推着往前跑（而且退不回来），
+    //   表现就是「一会这样一会那样，一会又等对方走」。
+    //   所以要求连续 2 帧识别结果完全一致，才认为画面稳定、才做走法判定。
+    var gridHash = 0;
+    for (var gi = 0; gi < 90; gi++) {
+      gridHash = ((gridHash * 31) + grid[gi]) | 0;
+    }
+    if (session.lastGridHash === gridHash) {
+      session.gridStable = (session.gridStable || 0) + 1;
+    } else {
+      session.gridStable = 0;
+      session.lastGridHash = gridHash;
+    }
+    var isStable = (session.gridStable >= 1);
+
+    var moved = isStable
+      ? session.tracker.tryAdvance(grid, opts.maxDiff === undefined ? 1 : opts.maxDiff)
+      : null;
 
     var out = {
       grid: Array.prototype.slice.call(grid),
@@ -2569,7 +2590,8 @@ var JJEngine = {
       moveDetected: false,
       mySide: mySideDetected,
       bottomRed: bottomRed,
-      bottomBlack: bottomBlack
+      bottomBlack: bottomBlack,
+      stable: isStable ? 1 : 0
     };
 
     if (moved && !moved.fail) {
