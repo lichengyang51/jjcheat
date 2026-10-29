@@ -169,28 +169,33 @@ function codesToBoardFen(codes) {
   return rows.join('/');
 }
 
-/** 局面合法性校验：识别错了宁可不用，也不要拿错局面算棋 */
+/**
+ * 局面合法性校验
+ *
+ * 只拦「明显不合理」的情况，不做严格将帅计数校验。
+ * 之前要求 redK===1 && blkK===1，结果红帅被高亮圈/绿点遮住一帧就整盘作废，
+ * 浮窗直接冻住不动。宁可容忍个别格识别错，也不要让程序彻底停止工作。
+ */
 function validateCodes(codes) {
-  var redK = 0, blkK = 0, redN = 0, blkN = 0;
-  var redA = 0, blkA = 0, redE = 0, blkE = 0;
+  var redN = 0, blkN = 0;
   for (var i = 0; i < 90; i++) {
     var v = codes[i];
     if (!v) continue;
-    if (v === 1) redK++;
-    else if (v === 8) blkK++;
-    else if (v === 2) redA++;
-    else if (v === 9) blkA++;
-    else if (v === 3) redE++;
-    else if (v === 10) blkE++;
     if (v >= 1 && v <= 7) redN++;
     else if (v >= 8 && v <= 14) blkN++;
   }
-  if (redK !== 1 || blkK !== 1) return false;
+  // 棋子数不可能超过初始布局
   if (redN > 16 || blkN > 16) return false;
-  if (redA > 2 || blkA > 2) return false;
-  if (redE > 2 || blkE > 2) return false;
-  // 士和象必须在自己的九宫/半场
+  // 全是空 / 只剩两三个子，说明识别彻底失败
+  if (redN + blkN < 6) return false;
   return true;
+}
+
+/** 宽松版：只要不是全空就接受，用于「让程序继续工作」 */
+function codesUsable(codes) {
+  var n = 0;
+  for (var i = 0; i < 90; i++) if (codes[i]) n++;
+  return n >= 4;
 }
 
 /* ============================================================
@@ -433,7 +438,7 @@ var JJEngine = {
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
     var codesSettled = (session.codesStable >= 2);
 
-    if (codesSettled && cls.codes && validateCodes(cls.codes)) {
+    if (codesSettled && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
       // 局面更新限流：最多每 700ms 换一次。
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
@@ -452,7 +457,7 @@ var JJEngine = {
         out.moveDetected = true;
         session.lastResult = null;
       }
-      codesOk = true;   // 校验通过就算识别有效（限流只是不换局面，不代表识别失败）
+      codesOk = true;
 
       // FEN 的走子方一律取「我方」。
       // 之前绕了一个 session.sideToMoveNow 变量，它和 mySide 会不同步，
@@ -463,11 +468,6 @@ var JJEngine = {
       out.fen = directFen;
       out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
-    } else if (cls.codes && !validateCodes(cls.codes)) {
-      // 识别出的局面不合法（缺将/多子），明确告知，不要拿错局面算棋
-      out.detectFail = true;
-      out.detectDiff = -1;
-      out.fen = session.lastBoardFen || session.tracker.fen;
     } else {
       // 还在等识别稳定，沿用上一次的结论
       out.fen = session.lastBoardFen || session.tracker.fen;
