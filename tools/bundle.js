@@ -391,9 +391,27 @@ var JJEngine = {
     // ★ 主路径：直接把识别出的兵种组回 FEN
     //   这才是象棋软件该有的做法 —— 不依赖「从开局一步步跟踪」，
     //   所以哪怕你中途进对局，也能立刻认出当前局面并给出下一步。
+    //
+    //   关键：识别结果必须先稳定下来才更新局面。
+    //   采样点只要偏几像素，相邻帧可能把同一个棋子识别成不同兵种，
+    //   FEN 每帧都不一样，着法就会乱跳（实测同一开局给出过相三进五/兵四进一/兵三进一三个答案）。
     var directFen = null;
     var codesOk = false;
-    if (cls.codes && validateCodes(cls.codes)) {
+    var codesHash = 0;
+    if (cls.codes) {
+      for (var ci = 0; ci < 90; ci++) {
+        codesHash = ((codesHash * 31) + cls.codes[ci]) | 0;
+      }
+    }
+    if (session.lastCodesHash === codesHash) {
+      session.codesStable = (session.codesStable || 0) + 1;
+    } else {
+      session.codesStable = 0;
+      session.lastCodesHash = codesHash;
+    }
+    var codesSettled = (session.codesStable >= 1);
+
+    if (codesSettled && cls.codes && validateCodes(cls.codes)) {
       codesOk = true;
       var boardFen = codesToBoardFen(cls.codes);
       if (boardFen !== session.lastBoardFen) {
@@ -407,22 +425,25 @@ var JJEngine = {
         (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.fen = directFen;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
+    } else if (cls.codes && !validateCodes(cls.codes)) {
+      // 识别出的局面不合法（缺将/多子），明确告知，不要拿错局面算棋
+      out.detectFail = true;
+      out.detectDiff = -1;
+      out.fen = session.lastBoardFen || session.tracker.fen;
     } else {
-      // 识别结果不可信 → 退回旧路径（从开局跟踪）
+      // 还在等识别稳定，沿用上一次的结论
+      out.fen = session.lastBoardFen || session.tracker.fen;
       if (isStable) {
         var mv2 = session.tracker.tryAdvance(grid, 1);
         if (mv2 && !mv2.fail) {
           out.moveDetected = true;
           out.move = mv2.ucci;
           out.moveChinese = mv2.chinese;
-        } else if (mv2 && mv2.fail) {
-          out.detectFail = true;
-          out.detectDiff = mv2.diff;
         }
       }
-      out.fen = session.tracker.fen;
     }
     out.codesValid = codesOk ? 1 : 0;
+    out.codesSettled = codesSettled ? 1 : 0;
 
     // 2) 到了我方走 → 算棋
     var analyzeFen = directFen || session.tracker.fen;

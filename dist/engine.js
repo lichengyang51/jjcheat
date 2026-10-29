@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T12:57:00.863Z
+ *  生成时间: 2026-10-29T13:03:30.777Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1636,16 +1636,47 @@ function autoDetectBoard(pixels, w, h) {
   const rows = findEvenlySpacedPeaks(rowScore, 10, 12);
   if (!cols || !rows) return null;
 
-  // 5) 合理性校验：竖线间距 / 横线间距 比例应接近 1:1
-  const colStep = (cols[8] - cols[0]) / 8;
-  const rowStep = (rows[9] - rows[0]) / 9;
-  if (colStep < 10 || rowStep < 10) return null;
-  const ratio = rowStep / colStep;
-  if (ratio < 0.65 || ratio > 1.60) return null;
+  // 5) 用「中位间距」重建网格，而不是直接用首尾位置。
+  //    首尾两条线最容易被装饰边框、棋盘外的 UI 干扰（实测下边会丢掉一整条线，
+  //    导致格高差 22%，最下面那排棋子采样全部偏离）。
+  //    中间几条线最干净，取相邻间距的中位数作为真实格距，再以中位线为锚点铺开。
+  function gapsMedian(arr) {
+    const g = [];
+    for (let i = 1; i < arr.length; i++) g.push(arr[i] - arr[i - 1]);
+    if (!g.length) return 0;
+    g.sort((a, b) => a - b);
+    return g[Math.floor(g.length / 2)];
+  }
 
-  // 6) 亚像素细化：抛物线插值，把 5 像素误差压到 1~2 像素
-  const colsF = cols.map(i => refinePeak(colScore, i));
-  const rowsF = rows.map(i => refinePeak(rowScore, i));
+  const gapW = gapsMedian(cols);
+  const gapH = gapsMedian(rows);
+  if (gapW < 10 || gapH < 10) return null;
+
+  // 格距比例校验：中国象棋格子接近正方形，横向纵向格距应接近
+  const ratio2 = gapH / gapW;
+  if (ratio2 < 0.75 || ratio2 > 1.35) return null;
+
+  // 用中位线做锚点，按中位格距向两侧铺开
+  const midC = cols[4];       // 第 5 条竖线（最中间）
+  const midR = rows[4];       // 第 5 条横线
+  const colsFit = new Array(9);
+  const rowsFit = new Array(10);
+  for (let i = 0; i < 9; i++) colsFit[i] = midC + (i - 4) * gapW;
+  for (let j = 0; j < 10; j++) rowsFit[j] = midR + (j - 4) * gapH;
+
+  // 6) 亚像素细化：用检测到的真实峰值修正（在重建位置附近找最近峰）
+  function snapToPeak(profile, guess) {
+    let best = guess, bestV = -1;
+    const lo = Math.max(1, Math.round(guess) - Math.round(gapW * 0.25));
+    const hi = Math.min(profile.length - 2, Math.round(guess) + Math.round(gapW * 0.25));
+    for (let i = lo; i <= hi; i++) {
+      if (profile[i] > bestV) { bestV = profile[i]; best = i; }
+    }
+    return refinePeak(profile, Math.round(best));
+  }
+
+  const colsF = colsFit.map(x => snapToPeak(colScore, x));
+  const rowsF = rowsFit.map(y => snapToPeak(rowScore, y));
 
   return [
     [colsF[0], rowsF[0]],   // 左上
@@ -2647,9 +2678,27 @@ var JJEngine = {
     // ★ 主路径：直接把识别出的兵种组回 FEN
     //   这才是象棋软件该有的做法 —— 不依赖「从开局一步步跟踪」，
     //   所以哪怕你中途进对局，也能立刻认出当前局面并给出下一步。
+    //
+    //   关键：识别结果必须先稳定下来才更新局面。
+    //   采样点只要偏几像素，相邻帧可能把同一个棋子识别成不同兵种，
+    //   FEN 每帧都不一样，着法就会乱跳（实测同一开局给出过相三进五/兵四进一/兵三进一三个答案）。
     var directFen = null;
     var codesOk = false;
-    if (cls.codes && validateCodes(cls.codes)) {
+    var codesHash = 0;
+    if (cls.codes) {
+      for (var ci = 0; ci < 90; ci++) {
+        codesHash = ((codesHash * 31) + cls.codes[ci]) | 0;
+      }
+    }
+    if (session.lastCodesHash === codesHash) {
+      session.codesStable = (session.codesStable || 0) + 1;
+    } else {
+      session.codesStable = 0;
+      session.lastCodesHash = codesHash;
+    }
+    var codesSettled = (session.codesStable >= 1);
+
+    if (codesSettled && cls.codes && validateCodes(cls.codes)) {
       codesOk = true;
       var boardFen = codesToBoardFen(cls.codes);
       if (boardFen !== session.lastBoardFen) {
@@ -2663,22 +2712,25 @@ var JJEngine = {
         (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.fen = directFen;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
+    } else if (cls.codes && !validateCodes(cls.codes)) {
+      // 识别出的局面不合法（缺将/多子），明确告知，不要拿错局面算棋
+      out.detectFail = true;
+      out.detectDiff = -1;
+      out.fen = session.lastBoardFen || session.tracker.fen;
     } else {
-      // 识别结果不可信 → 退回旧路径（从开局跟踪）
+      // 还在等识别稳定，沿用上一次的结论
+      out.fen = session.lastBoardFen || session.tracker.fen;
       if (isStable) {
         var mv2 = session.tracker.tryAdvance(grid, 1);
         if (mv2 && !mv2.fail) {
           out.moveDetected = true;
           out.move = mv2.ucci;
           out.moveChinese = mv2.chinese;
-        } else if (mv2 && mv2.fail) {
-          out.detectFail = true;
-          out.detectDiff = mv2.diff;
         }
       }
-      out.fen = session.tracker.fen;
     }
     out.codesValid = codesOk ? 1 : 0;
+    out.codesSettled = codesSettled ? 1 : 0;
 
     // 2) 到了我方走 → 算棋
     var analyzeFen = directFen || session.tracker.fen;

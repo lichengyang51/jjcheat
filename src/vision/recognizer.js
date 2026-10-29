@@ -188,16 +188,47 @@ function autoDetectBoard(pixels, w, h) {
   const rows = findEvenlySpacedPeaks(rowScore, 10, 12);
   if (!cols || !rows) return null;
 
-  // 5) 合理性校验：竖线间距 / 横线间距 比例应接近 1:1
-  const colStep = (cols[8] - cols[0]) / 8;
-  const rowStep = (rows[9] - rows[0]) / 9;
-  if (colStep < 10 || rowStep < 10) return null;
-  const ratio = rowStep / colStep;
-  if (ratio < 0.65 || ratio > 1.60) return null;
+  // 5) 用「中位间距」重建网格，而不是直接用首尾位置。
+  //    首尾两条线最容易被装饰边框、棋盘外的 UI 干扰（实测下边会丢掉一整条线，
+  //    导致格高差 22%，最下面那排棋子采样全部偏离）。
+  //    中间几条线最干净，取相邻间距的中位数作为真实格距，再以中位线为锚点铺开。
+  function gapsMedian(arr) {
+    const g = [];
+    for (let i = 1; i < arr.length; i++) g.push(arr[i] - arr[i - 1]);
+    if (!g.length) return 0;
+    g.sort((a, b) => a - b);
+    return g[Math.floor(g.length / 2)];
+  }
 
-  // 6) 亚像素细化：抛物线插值，把 5 像素误差压到 1~2 像素
-  const colsF = cols.map(i => refinePeak(colScore, i));
-  const rowsF = rows.map(i => refinePeak(rowScore, i));
+  const gapW = gapsMedian(cols);
+  const gapH = gapsMedian(rows);
+  if (gapW < 10 || gapH < 10) return null;
+
+  // 格距比例校验：中国象棋格子接近正方形，横向纵向格距应接近
+  const ratio2 = gapH / gapW;
+  if (ratio2 < 0.75 || ratio2 > 1.35) return null;
+
+  // 用中位线做锚点，按中位格距向两侧铺开
+  const midC = cols[4];       // 第 5 条竖线（最中间）
+  const midR = rows[4];       // 第 5 条横线
+  const colsFit = new Array(9);
+  const rowsFit = new Array(10);
+  for (let i = 0; i < 9; i++) colsFit[i] = midC + (i - 4) * gapW;
+  for (let j = 0; j < 10; j++) rowsFit[j] = midR + (j - 4) * gapH;
+
+  // 6) 亚像素细化：用检测到的真实峰值修正（在重建位置附近找最近峰）
+  function snapToPeak(profile, guess) {
+    let best = guess, bestV = -1;
+    const lo = Math.max(1, Math.round(guess) - Math.round(gapW * 0.25));
+    const hi = Math.min(profile.length - 2, Math.round(guess) + Math.round(gapW * 0.25));
+    for (let i = lo; i <= hi; i++) {
+      if (profile[i] > bestV) { bestV = profile[i]; best = i; }
+    }
+    return refinePeak(profile, Math.round(best));
+  }
+
+  const colsF = colsFit.map(x => snapToPeak(colScore, x));
+  const rowsF = rowsFit.map(y => snapToPeak(rowScore, y));
 
   return [
     [colsF[0], rowsF[0]],   // 左上
