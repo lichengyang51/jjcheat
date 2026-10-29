@@ -144,7 +144,9 @@ final class FrameClient {
             guard s >= 0 else { return }
             let ok = Darwin.connect(s, info.pointee.ai_addr, info.pointee.ai_addrlen)
             if ok != 0 {
-                close(s)
+                // 显式走 Darwin 命名空间：本类有同名实例方法 close()/connect()，
+                // 不加前缀会被 Swift 优先解析到实例方法上
+                Darwin.close(s)
                 // 主 App 可能还没起监听，退避重试；上限 120 次（约 60 秒）
                 if retry < 120 {
                     self.queue.asyncAfter(deadline: .now() + 0.5) {
