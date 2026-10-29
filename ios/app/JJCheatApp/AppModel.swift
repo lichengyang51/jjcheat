@@ -58,6 +58,8 @@ final class AppModel: ObservableObject {
     @Published var detail = ""
 
     private var busy = false
+    private var learnAttempts = 0          // 学习尝试次数（每 5 帧一次）
+    private let learnGiveUpAfter = 12      // 约 8 秒还学不到就降级启动
     private let processQueue = DispatchQueue(label: "com.fujiang.jjcheat.process", qos: .userInitiated)
     private var observers: [NSObjectProtocol] = []
 
@@ -125,14 +127,16 @@ final class AppModel: ObservableObject {
         JJEngine.shared.reset(fen: nil)
         calibrated = true
         learned = false
+        learnAttempts = 0
         UserDefaults.standard.set(false, forKey: learnedKey)
-        status = "标定完成，请让画面停在标准开局"
+        status = "标定完成 · 请让画面停在标准开局，等 3 秒自动学棋盘"
         refreshHUD()
     }
 
     func forceRelearn() {
         JJEngine.shared.reset(fen: nil)
         learned = false
+        learnAttempts = 0
         UserDefaults.standard.set(false, forKey: learnedKey)
         status = "请让画面停在标准开局，正在重新学习…"
         refreshHUD()
@@ -194,15 +198,31 @@ final class AppModel: ObservableObject {
         guard !busy else { return }
         busy = true
 
-        // 学习阶段
+        // 学习阶段：必须是标准开局画面，且学完要验证。
+        // 学不到就降级启动，绝不让用户卡死在这里。
         if !learned {
-            if let info = JJEngine.shared.learnBoard(pixels: frame.data,
-                                                     width: frame.width,
-                                                     height: frame.height),
-               JJEngine.int(info, "templateCount") > 0 {
+            learnAttempts += 1
+            if learnAttempts % 5 == 1 {
+                if let info = JJEngine.shared.learnBoard(pixels: frame.data,
+                                                         width: frame.width,
+                                                         height: frame.height),
+                   JJEngine.bool(info, "ok") {
+                    learned = true
+                    UserDefaults.standard.set(true, forKey: learnedKey)
+                    let diff = JJEngine.int(info, "verifyDiff", -1)
+                    status = "棋盘学习完成（校验 \(diff) 格误差），点「③ 打开画中画」"
+                    NSLog("[JJCheat] learnBoard ok diff=%d", diff)
+                    refreshHUD()
+                } else {
+                    status = "等开局：把画面停在标准开局，等 3 秒"
+                }
+            }
+            // 降级兜底：一直学不到就直接用默认阈值跑，别卡死
+            if !learned && learnAttempts > learnGiveUpAfter {
                 learned = true
                 UserDefaults.standard.set(true, forKey: learnedKey)
-                status = "棋盘学习完成，点「③ 打开画中画」"
+                status = "没等到开局画面，已用默认参数启动（准确率略低，建议稍后重开新局再点「重新学习棋盘」）"
+                NSLog("[JJCheat] learnBoard 超时，降级启动")
                 refreshHUD()
             }
             busy = false

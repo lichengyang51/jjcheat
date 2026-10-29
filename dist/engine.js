@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T07:38:09.985Z
+ *  生成时间: 2026-10-29T11:01:21.157Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1976,10 +1976,36 @@ var JJEngine = {
     var empty = TRK.startEmptySquares();
     session.recognizer.learnBackground(stats, empty);
     session.recognizer.learnTemplates(stats, TRK.startPieceMap());
+
+    // ---- 关键：学完立刻用学到的模型识别同一帧，验证画面到底是不是开局 ----
+    var verifyDiff = -1;
+    var ok = false;
+    try {
+      var cls = session.recognizer.classify(stats);
+      var expectedPos = new POS.Position(C.START_FEN);
+      var expected = TRK.boardToGrid(expectedPos.board);
+      var d = 0;
+      for (var i = 0; i < 90; i++) {
+        if (cls.grid[i] !== expected[i]) d++;
+      }
+      verifyDiff = d;
+      ok = (d <= 3);   // 容许 3 格误差（噪声/高亮）
+    } catch (e) {
+      verifyDiff = -2;
+      ok = false;
+    }
+
     return {
       bgMeanL: session.recognizer.bgModel.meanL,
-      templateCount: session.recognizer.templates.length
+      templateCount: session.recognizer.templates.length,
+      verifyDiff: verifyDiff,
+      ok: ok
     };
+  },
+
+  /** 跳过学习，直接按默认阈值工作（画面不是开局时的兜底） */
+  skipLearning: function () {
+    return { skipped: true };
   },
 
   /**
