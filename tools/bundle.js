@@ -533,10 +533,40 @@ var JJEngine = {
     session.lowConfCount = lowConfCount;
 
     // 画面翻转时（用户执黑）翻回标准坐标，引擎内部一律「红在下」
+    //
+    // ★ 朝向改成每帧重判，不再只信 learnBoard 那一帧的结论。
+    //   之前 session.flipped 只在 learnBoard 时定一次，之后永不更新：
+    //   learnBoard 那一帧如果刚好没读准，或者你换了执红/执黑，
+    //   朝向就一直错着，着法自然全是乱的（浮窗还会把「你执黑」写成「你执红」）。
+    //   判据：看底部两行（第 8、9 行）以哪一方棋子为主 —— 玩家自己永远在下方。
+    //   只有双方数量差 ≥3 才投票，且要连续 2 帧一致才改，避免中途抖动。
+    (function detectOrientation(g) {
+      var r = 0, b = 0;
+      for (var rr = 8; rr <= 9; rr++) {
+        for (var cc = 0; cc < 9; cc++) {
+          var v = g[rr * 9 + cc];
+          if (v === 1) r++; else if (v === 2) b++;
+        }
+      }
+      var vote = null;
+      if (b >= r + 3) vote = 'black';
+      else if (r >= b + 3) vote = 'red';
+      if (!vote) return;
+      if (vote === session.orientVote) {
+        session.orientCount = (session.orientCount || 0) + 1;
+      } else {
+        session.orientVote = vote;
+        session.orientCount = 1;
+      }
+      if (!session.orientSeen || (session.orientCount || 0) >= 2) {
+        session.orientSeen = true;
+        session.flipped = (vote === 'black');
+      }
+    })(cls.grid);
+
     var grid = session.flipped ? flipGrid(cls.grid) : cls.grid;
 
-    // ★ 自动判定「我执红还是执黑」
-    //   由画面朝向决定：黑在下 = 我执黑，红在下 = 我执红。
+    // ★ 我执红还是执黑：由画面朝向决定（黑在下 = 我执黑，红在下 = 我执红）
     var mySideDetected = session.flipped ? 'black' : 'red';
     var bottomRed = mySideDetected === 'red' ? 1 : 0;
     var bottomBlack = mySideDetected === 'black' ? 1 : 0;
@@ -604,11 +634,20 @@ var JJEngine = {
     //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
     var firstLatch = !session.lastBoardFen;
     if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
-      var boardFen = codesToBoardFen(cls.codes);
+      // 两套 FEN，别再混用：
+      //   rawFen = 屏幕原样（给浮窗显示，必须跟你眼睛看到的一模一样）
+      //   engFen = 引擎内部坐标（红永远在下，给算棋用）
+      // 你执黑时这两套是上下相反的。之前只存了一套、还按屏幕方向去算棋，
+      // 引擎会把黑方当红方，着法自然全错。
+      var rawFen = codesToBoardFen(cls.codes);
+      var engCodes = session.flipped ? flipCodes(cls.codes) : cls.codes;
+      var boardFen = codesToBoardFen(engCodes);
       // 局面更新限流：最多每 700ms 换一次。
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
       var nowMs = Date.now();
       var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
+
+      session.lastRawFen = rawFen;
 
       if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
@@ -634,12 +673,16 @@ var JJEngine = {
       // 你的诉求是「告诉我我该走哪步」，所以引擎永远站在我方算。
       directFen = session.lastBoardFen + ' ' +
         (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
-      out.fen = directFen;
+      // 浮窗显示用「屏幕原样」的 FEN：你执黑时它就是黑在下，
+      // 跟你眼睛看到的完全一致。算棋用的是 directFen（内部坐标，红永远在下）。
+      out.fen = (session.lastRawFen || session.lastBoardFen) + ' ' +
+        (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
+      out.engineFen = directFen;
       out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
     } else {
       // 还在等识别稳定，沿用上一次的结论
-      out.fen = session.lastBoardFen || session.tracker.fen;
+      out.fen = session.lastRawFen || session.lastBoardFen || session.tracker.fen;
       if (isStable) {
         var mv2 = session.tracker.tryAdvance(grid, 1);
         if (mv2 && !mv2.fail) {

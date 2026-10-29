@@ -62,6 +62,10 @@ final class AppModel: ObservableObject {
     ///  压住了那几格在抓屏里就是浮窗自己的米黄棋盘，识别必然错，必须先提醒拖开。
     @Published var pipOverlap: Bool = false
 
+    /// 浮窗里显示的棋盘 = 抓屏裁出来的真实画面
+    @Published var boardCrop: UIImage?
+    private var cropTick = 0
+
     private var autoCalibAttempts = 0
     private let autoCalibGiveUp = 40      // 约 5 秒还找不到就报失败
 
@@ -306,6 +310,12 @@ final class AppModel: ObservableObject {
                 return
             }
         }
+        // 每 3 帧更新一次浮窗里的棋盘画面（够顺滑，又不浪费 CPU）
+        cropTick += 1
+        if cropTick % 3 == 1, let img = makeBoardCrop(frame) {
+            boardCrop = img
+        }
+
         guard !busy else { return }
         busy = true
 
@@ -462,8 +472,43 @@ final class AppModel: ObservableObject {
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
             statusKind: kind,
-            fen: fen
+            fen: fen,
+            boardImage: boardCrop
         )
+    }
+
+    /// 从抓屏帧里裁出棋盘区域，给浮窗原样显示
+    ///
+    /// 裁剪范围用跟引擎一致的归一化棋盘位置（JJ象棋 布局固定）：
+    ///   x 6.57% ~ 93.28%   y 27.71% ~ 71.23%
+    /// 这样浮窗里就是屏幕上真实的那块棋盘，和识别结果无关。
+    private func makeBoardCrop(_ frame: FrameServer.Frame) -> UIImage? {
+        let W = frame.width, H = frame.height
+        guard W > 32, H > 32 else { return nil }
+        let x0 = max(0, Int(Double(W) * 0.0657))
+        let x1 = min(W - 1, Int(Double(W) * 0.9328))
+        let y0 = max(0, Int(Double(H) * 0.2771))
+        let y1 = min(H - 1, Int(Double(H) * 0.7123))
+        let cw = x1 - x0 + 1, chh = y1 - y0 + 1
+        guard cw > 16, chh > 16, frame.data.count >= W * H * 4 else { return nil }
+
+        var buf = [UInt8](repeating: 0, count: cw * chh * 4)
+        frame.data.withUnsafeBytes { raw in
+            guard let p = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            for y in 0..<chh {
+                let srcRow = ((y0 + y) * W + x0) * 4
+                let dstRow = y * cw * 4
+                for i in 0..<(cw * 4) { buf[dstRow + i] = p[srcRow + i] }
+            }
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue)
+        guard let provider = CGDataProvider(data: Data(buf) as CFData),
+              let cg = CGImage(width: cw, height: chh, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: cw * 4, space: cs, bitmapInfo: info,
+                               provider: provider, decode: nil, shouldInterpolate: false,
+                               intent: .defaultIntent) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     // MARK: - 画中画
