@@ -22,6 +22,8 @@ final class FrameServer {
 
     /// 收到新帧（主线程回调）
     var onFrame: ((Frame) -> Void)?
+    /// 收到心跳包（主线程回调）——证明扩展活着
+    var onHeartbeat: (() -> Void)?
     /// 连接状态变化（主线程回调）
     var onStateChange: ((Bool) -> Void)?
 
@@ -33,6 +35,8 @@ final class FrameServer {
 
     private(set) var isRunning = false
     private(set) var frameCount: UInt64 = 0
+    private(set) var heartbeatCount: UInt64 = 0
+    private(set) var badPacketCount: UInt64 = 0
     private(set) var lastFrameSize: CGSize = .zero
 
     // MARK: - 启停
@@ -134,6 +138,7 @@ final class FrameServer {
             let headerData = pending.prefix(JJProto.headerSize)
             guard let h = JJFrameHeader.decode(Data(headerData)) else {
                 // 魔数对不上 → 丢一个字节重新同步
+                badPacketCount += 1
                 pending.removeFirst()
                 continue
             }
@@ -142,6 +147,15 @@ final class FrameServer {
 
             let payload = pending.subdata(in: JJProto.headerSize..<total)
             pending.removeFirst(total)
+
+            // 心跳包：只证明扩展活着，不带画面
+            if h.isHeartbeat {
+                heartbeatCount += 1
+                DispatchQueue.main.async { [weak self] in
+                    self?.onHeartbeat?()
+                }
+                continue
+            }
 
             frameCount += 1
             lastFrameSize = CGSize(width: Int(h.width), height: Int(h.height))

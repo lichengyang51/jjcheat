@@ -19,6 +19,8 @@ final class AppModel: ObservableObject {
     @Published var connected = false
     @Published var serverRunning = false
     @Published var receivedFrames: UInt64 = 0
+    @Published var heartbeats: UInt64 = 0
+    @Published var badPackets: UInt64 = 0
     @Published var lastFrameAt: Date?
     @Published var lastImage: UIImage?
     @Published var frameSize: CGSize = .zero
@@ -49,6 +51,11 @@ final class AppModel: ObservableObject {
 
         FrameServer.shared.onFrame = { [weak self] frame in
             self?.handle(frame)
+        }
+        FrameServer.shared.onHeartbeat = { [weak self] in
+            guard let self else { return }
+            self.heartbeats = FrameServer.shared.heartbeatCount
+            self.badPackets = FrameServer.shared.badPacketCount
         }
         FrameServer.shared.onStateChange = { [weak self] up in
             guard let self else { return }

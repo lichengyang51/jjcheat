@@ -2,9 +2,12 @@
 //  Protocol.swift
 //  JJCheat —— App 与 Broadcast Extension 共用的帧协议
 //
-//  设计要点：免费 Apple ID 签名拿不到 App Group 能力，
+//  免费 Apple ID 签名拿不到 App Group 能力，
 //  所以用 127.0.0.1 回环 TCP 代替共享容器。
-//  Extension 当 client，主 App 当 server。
+//
+//  两种包：
+//    payloadLen > 0  正常画面帧
+//    payloadLen == 0 心跳包（扩展存活 / 转换失败时用来证明它还活着）
 //
 
 import Foundation
@@ -29,14 +32,22 @@ public struct JJFrameHeader {
         self.payloadLen = payloadLen
     }
 
+    /// 心跳包：无负载
+    public static func heartbeat() -> JJFrameHeader {
+        JJFrameHeader(width: 0, height: 0, bytesPerRow: 0, payloadLen: 0)
+    }
+
+    public var isHeartbeat: Bool { payloadLen == 0 }
+
     public func encoded() -> Data {
         var d = Data(capacity: JJProto.headerSize)
-        var m = JJProto.magic.bigEndian
+        var m = JJProto.magic
         var v = JJProto.version
-        var w = width.bigEndian
-        var h = height.bigEndian
-        var b = bytesPerRow.bigEndian
-        var l = payloadLen.bigEndian
+        var w = width
+        var h = height
+        var b = bytesPerRow
+        var l = payloadLen
+        // 全部用小端写，接收端也按小端读，两端严格对称
         withUnsafeBytes(of: &m) { d.append(contentsOf: $0) }
         withUnsafeBytes(of: &v) { d.append(contentsOf: $0) }
         withUnsafeBytes(of: &w) { d.append(contentsOf: $0) }
@@ -46,18 +57,20 @@ public struct JJFrameHeader {
         return d
     }
 
-    /// 返回 nil 表示魔数校验失败（说明收到的是垃圾数据）
+    /// 返回 nil 表示魔数/版本校验失败（收到的是垃圾数据）
     public static func decode(_ data: Data) -> JJFrameHeader? {
         guard data.count >= JJProto.headerSize else { return nil }
-        let m = data.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self).bigEndian }
+        let m = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
         guard m == JJProto.magic else { return nil }
-        let v = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt8.self) }
+        let v = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt8.self) }
         guard v == JJProto.version else { return nil }
-        let w = data.withUnsafeBytes { $0.load(fromByteOffset: 5, as: UInt16.self).bigEndian }
-        let h = data.withUnsafeBytes { $0.load(fromByteOffset: 7, as: UInt16.self).bigEndian }
-        let b = data.withUnsafeBytes { $0.load(fromByteOffset: 9, as: UInt32.self).bigEndian }
-        let l = data.withUnsafeBytes { $0.load(fromByteOffset: 13, as: UInt32.self).bigEndian }
-        guard w > 0, h > 0, l > 0, l < 64 * 1024 * 1024 else { return nil }
+        let w = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 5, as: UInt16.self) }
+        let h = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 7, as: UInt16.self) }
+        let b = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 9, as: UInt32.self) }
+        let l = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 13, as: UInt32.self) }
+        guard l < 64 * 1024 * 1024 else { return nil }
+        // 心跳包没有宽高，正常帧必须有
+        if l > 0 && (w == 0 || h == 0) { return nil }
         return JJFrameHeader(width: w, height: h, bytesPerRow: b, payloadLen: l)
     }
 }
