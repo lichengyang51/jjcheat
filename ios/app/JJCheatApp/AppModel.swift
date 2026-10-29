@@ -13,6 +13,13 @@ import UIKit
 import Combine
 import ReplayKit
 
+/// 一帧画面快照（校准用）
+struct FrameSnapshot: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let time: Date
+}
+
 final class AppModel: ObservableObject {
 
     // 通道状态
@@ -27,6 +34,11 @@ final class AppModel: ObservableObject {
     @Published var lastImage: UIImage?
     @Published var frameSize: CGSize = .zero
     @Published var extID: String = ExtensionInfo.broadcastBundleID
+
+    /// 最近若干帧的历史（校准用：切回 App 后最新帧是「JJCheat 自己」，
+    /// 需要往回翻到刚才在 JJ象棋 里的那一帧）
+    @Published var frameHistory: [FrameSnapshot] = []
+    private let historyLimit = 24
 
     // 引擎输出
     @Published var fen = BoardRenderView.startFen
@@ -127,10 +139,24 @@ final class AppModel: ObservableObject {
         if receivedFrames == 0 {
             return "还没收到任何录屏画面。请确认：\n① 控制中心/灵动岛有红点（录屏在跑）\n② 录屏里选的是「JJCheat 录屏」\n③ 切到 JJ象棋再切回来，等 2 秒"
         }
-        if lastImage == nil {
+        if frameHistory.isEmpty && lastImage == nil {
             return "收到帧了但画面解析失败，重开录屏试试。"
         }
         return nil
+    }
+
+    /// 清空历史帧（每次开始校准时调用，避免拿到上一次的旧画面）
+    func clearHistory() {
+        frameHistory.removeAll()
+    }
+
+    /// 当前校准可选的所有画面（历史 + 最新）
+    func calibrationFrames() -> [FrameSnapshot] {
+        var list = frameHistory
+        if let last = lastImage {
+            list.append(FrameSnapshot(image: last, time: lastFrameAt ?? Date()))
+        }
+        return list
     }
 
     // MARK: - 帧处理
@@ -140,9 +166,17 @@ final class AppModel: ObservableObject {
         frameSize = CGSize(width: frame.width, height: frame.height)
         lastFrameAt = Date()
 
-        // 校准界面需要看到画面，每 2 帧刷新一次省内存
-        if lastImage == nil || receivedFrames % 2 == 0 {
+        // 主界面预览：每 3 帧刷新一次省内存
+        if lastImage == nil || receivedFrames % 3 == 0 {
             lastImage = Self.image(from: frame)
+        }
+
+        // 历史帧：校准时要往回翻到 JJ象棋 那一帧
+        if receivedFrames % 2 == 0, let img = Self.image(from: frame) {
+            frameHistory.append(FrameSnapshot(image: img, time: Date()))
+            if frameHistory.count > historyLimit {
+                frameHistory.removeFirst(frameHistory.count - historyLimit)
+            }
         }
 
         guard calibrated else { return }

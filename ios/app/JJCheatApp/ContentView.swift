@@ -63,6 +63,7 @@ struct ContentView: View {
     @StateObject private var model = AppModel()
     @State private var pickerTrigger = 0
     @State private var showCalibration = false
+    @State private var calibFrames: [FrameSnapshot] = []
     @State private var anchorView = UIView()
     @State private var showAlert = false
     @State private var alertText = ""
@@ -101,6 +102,13 @@ struct ContentView: View {
                         Button {
                             if let blocker = model.calibrationBlocker() {
                                 alertText = blocker
+                                showAlert = true
+                                return
+                            }
+                            // 冻结当前可见的历史帧，避免新帧把你要的那一张挤出去
+                            calibFrames = model.calibrationFrames()
+                            if calibFrames.isEmpty {
+                                alertText = "还没有可用画面，重开录屏再试。"
                                 showAlert = true
                                 return
                             }
@@ -160,16 +168,11 @@ struct ContentView: View {
                 Text(alertText)
             }
             .sheet(isPresented: $showCalibration) {
-                if let img = model.lastImage {
-                    CalibrationView(image: img) { pts in
-                        model.applyCalibration(pts)
-                        showCalibration = false
-                    } onCancel: {
-                        showCalibration = false
-                    }
-                } else {
-                    Text("画面还没有准备好")
-                        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCalibration = false } }
+                CalibrationView(frames: calibFrames) { pts in
+                    model.applyCalibration(pts)
+                    showCalibration = false
+                } onCancel: {
+                    showCalibration = false
                 }
             }
         }
