@@ -217,12 +217,13 @@ final class AppModel: ObservableObject {
                     status = "等开局：把画面停在标准开局，等 3 秒"
                 }
             }
-            // 降级兜底：一直学不到就直接用默认阈值跑，别卡死
+            // 降级兜底：一直学不到就清空错误的模型、退回默认阈值跑，别卡死
             if !learned && learnAttempts > learnGiveUpAfter {
                 learned = true
+                JJEngine.shared.skipLearning()     // 关键：清掉中局误学出来的脏模型
                 UserDefaults.standard.set(true, forKey: learnedKey)
-                status = "没等到开局画面，已用默认参数启动（准确率略低，建议稍后重开新局再点「重新学习棋盘」）"
-                NSLog("[JJCheat] learnBoard 超时，降级启动")
+                status = "当前画面不是标准开局，已退回默认参数启动。识别可能不准 —— 想准确请先开一局新棋，再点「重新学习棋盘」"
+                NSLog("[JJCheat] learnBoard 超时，退回默认阈值")
                 refreshHUD()
             }
             busy = false

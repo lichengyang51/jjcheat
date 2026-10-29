@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T11:01:21.157Z
+ *  生成时间: 2026-10-29T11:06:20.791Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1972,12 +1972,17 @@ var JJEngine = {
   /** 在开局局面状态下学习棋盘背景（必须画面正好是开局） */
   learnBoard: function (pixels, w, h) {
     if (!session.recognizer) throw new Error('未标定');
+
+    // 先备份：验证不通过要回滚，绝不能让错误的背景模型留下来污染识别
+    var backupBg = session.recognizer.bgModel;
+    var backupTpl = session.recognizer.templates;
+
     var stats = session.recognizer.sampleAll(pixels, w, h, true);
     var empty = TRK.startEmptySquares();
     session.recognizer.learnBackground(stats, empty);
     session.recognizer.learnTemplates(stats, TRK.startPieceMap());
 
-    // ---- 关键：学完立刻用学到的模型识别同一帧，验证画面到底是不是开局 ----
+    // ---- 学完立刻用学到的模型识别同一帧，验证画面到底是不是开局 ----
     var verifyDiff = -1;
     var ok = false;
     try {
@@ -1989,22 +1994,32 @@ var JJEngine = {
         if (cls.grid[i] !== expected[i]) d++;
       }
       verifyDiff = d;
-      ok = (d <= 3);   // 容许 3 格误差（噪声/高亮）
+      ok = (d <= 3);
     } catch (e) {
       verifyDiff = -2;
       ok = false;
     }
 
+    if (!ok) {
+      // 回滚，保持干净状态
+      session.recognizer.bgModel = backupBg;
+      session.recognizer.templates = backupTpl;
+    }
+
     return {
-      bgMeanL: session.recognizer.bgModel.meanL,
-      templateCount: session.recognizer.templates.length,
+      bgMeanL: session.recognizer.bgModel ? session.recognizer.bgModel.meanL : -1,
+      templateCount: session.recognizer.templates ? session.recognizer.templates.length : 0,
       verifyDiff: verifyDiff,
       ok: ok
     };
   },
 
-  /** 跳过学习，直接按默认阈值工作（画面不是开局时的兜底） */
+  /** 清空学习结果，退回默认阈值模式（画面不是开局时的兜底） */
   skipLearning: function () {
+    if (session.recognizer) {
+      session.recognizer.bgModel = null;
+      session.recognizer.templates = null;
+    }
     return { skipped: true };
   },
 

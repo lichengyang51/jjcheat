@@ -85,6 +85,14 @@ final class JJEngine {
         }
     }
 
+    /// 清空学习结果，退回默认阈值（画面不是开局时的兜底）
+    func skipLearning() {
+        guard loadIfNeeded() else { return }
+        queue.sync { () -> Void in
+            _ = self.callEngine("skipLearning", args: [])
+        }
+    }
+
     // MARK: - 学习棋盘
 
     func learnBoard(pixels: Data, width: Int, height: Int) -> [String: Any]? {
