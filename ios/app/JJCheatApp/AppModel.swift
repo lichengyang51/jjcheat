@@ -62,6 +62,10 @@ final class AppModel: ObservableObject {
     ///  压住了那几格在抓屏里就是浮窗自己的米黄棋盘，识别必然错，必须先提醒拖开。
     @Published var pipOverlap: Bool = false
 
+    /// 抓屏诊断：分辨率 + 该帧稀疏采样得到的平均 RGB（每 30 帧算一次）
+    @Published var captureDiag: String = ""
+    private var diagTick = 0
+
     private var autoCalibAttempts = 0
     private let autoCalibGiveUp = 40      // 约 5 秒还找不到就报失败
 
@@ -306,6 +310,9 @@ final class AppModel: ObservableObject {
                 return
             }
         }
+        // 诊断采样放在 busy 判定之前，这样每帧都能统计到（不受丢帧影响）
+        updateCaptureDiag(frame)
+
         guard !busy else { return }
         busy = true
 
@@ -440,6 +447,28 @@ final class AppModel: ObservableObject {
     }
 
     /// 把当前状态推到浮窗
+    /// 稀疏采样算整帧平均色，用来判断抓屏的颜色转换是否正常
+    private func updateCaptureDiag(_ frame: FrameServer.Frame) {
+        diagTick += 1
+        guard diagTick % 30 == 1 else { return }
+        let n = frame.data.count / 4
+        guard n > 0 else { return }
+        var sr = 0, sg = 0, sb = 0, cnt = 0
+        var i = 0
+        let step = 37
+        frame.data.withUnsafeBytes { raw in
+            guard let p = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            while i < n {
+                sr += Int(p[i * 4]); sg += Int(p[i * 4 + 1]); sb += Int(p[i * 4 + 2])
+                cnt += 1
+                i += step
+            }
+        }
+        guard cnt > 0 else { return }
+        captureDiag = String(format: "%dx%d c=%d,%d,%d", frame.width, frame.height,
+                               sr / cnt, sg / cnt, sb / cnt)
+    }
+
     func refreshHUD() {
         guard PiPController.shared.isActive else { return }
         // 状态色：就绪 → 绿；找棋盘/学棋子中 → 蓝；失败 → 红；其它 → 灰
@@ -460,7 +489,8 @@ final class AppModel: ObservableObject {
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
             statusKind: kind,
-            fen: fen
+            fen: fen,
+            diag: captureDiag
         )
     }
 

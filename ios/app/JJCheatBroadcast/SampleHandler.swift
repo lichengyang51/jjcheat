@@ -154,41 +154,90 @@ final class SampleHandler: RPBroadcastSampleHandler {
         defer { CVPixelBufferUnlockBaseAddress(px, .readOnly) }
 
         let fmt = CVPixelBufferGetPixelFormatType(px)
+        let planes = CVPixelBufferGetPlaneCount(px)
         var out = Data(count: dh * rowBytes)
         var filled = false
 
-        if CVPixelBufferIsPlanar(px) && CVPixelBufferGetPlaneCount(px) >= 2 {
-            // ---- 双平面 YUV（420v / 420f / NV12）----
-            guard let yBase = CVPixelBufferGetBaseAddressOfPlane(px, 0),
-                  let uvBase = CVPixelBufferGetBaseAddressOfPlane(px, 1) else { return nil }
+        // 只在第一帧打一次日志，方便确认拿到的到底是什么格式
+        if !loggedFormat {
+            loggedFormat = true
+            NSLog("[JJCheat/bc] 像素格式 = %@ (planes=%d, %dx%d)",
+                  Self.fourCC(fmt), planes, sw, sh)
+        }
+
+        // 亮度范围：420v=视频范围(16~235)、420f=全范围(0~255)。
+        // 但 iOS 抓屏内容常常是全范围却标成 420v，所以再按实际数据兜一层：
+        // 采样一批 Y，如果最暗 < 12 或最亮 > 242，说明内容其实是全范围。
+        var useFullRange = (fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+
+        if CVPixelBufferIsPlanar(px) && planes >= 2 {
+            guard let yBase = CVPixelBufferGetBaseAddressOfPlane(px, 0) else { return nil }
             let yBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 0)
-            let uvBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 1)
             let ySrc = yBase.assumingMemoryBound(to: UInt8.self)
+
+            if !useFullRange {
+                var yMin = 255, yMax = 0
+                var sum = 0, cnt = 0
+                var sy = 0
+                while sy < sh {
+                    var sx = 0
+                    let row = ySrc + sy * yBpr
+                    while sx < sw {
+                        let v = Int(row[sx])
+                        if v < yMin { yMin = v }
+                        if v > yMax { yMax = v }
+                        sum += v; cnt += 1
+                        sx += 17
+                    }
+                    sy += 23
+                }
+                // 视频范围的 Y 基本落在 16~235；出现 <12 或 >242 就是全范围内容
+                if cnt > 0 && (yMin < 12 || yMax > 242) { useFullRange = true }
+            }
+
+            // 三个平面（420p）：Y / Cb / Cr 各自独立，Cb、Cr 不是交错的
+            let threePlane = (planes >= 3)
+            guard let uvBase = CVPixelBufferGetBaseAddressOfPlane(px, 1) else { return nil }
+            let uvBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 1)
             let uvSrc = uvBase.assumingMemoryBound(to: UInt8.self)
-            let fullRange = (fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+
+            var crSrc = uvSrc
+            var crBpr = uvBpr
+            if threePlane {
+                guard let crBase = CVPixelBufferGetBaseAddressOfPlane(px, 2) else { return nil }
+                crSrc = crBase.assumingMemoryBound(to: UInt8.self)
+                crBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 2)
+            }
 
             out.withUnsafeMutableBytes { raw in
                 guard let dst = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                 for y in 0..<dh {
                     let sy = y * downscale
                     let yRow = ySrc + sy * yBpr
-                    let uvRow = uvSrc + (sy >> 1) * uvBpr
+                    let cbRow = uvSrc + (sy >> 1) * uvBpr
+                    let crRow = threePlane ? (crSrc + (sy >> 1) * crBpr) : cbRow
                     let dRow = dst + y * rowBytes
                     for x in 0..<dw {
                         let sx = x * downscale
                         let Y = Int(yRow[sx])
-                        let ux = (sx >> 1) << 1          // NV12: Cb,Cr 交错
-                        let cb = Int(uvRow[ux]) - 128
-                        let cr = Int(uvRow[ux + 1]) - 128
+                        var cb: Int, cr: Int
+                        if threePlane {
+                            // 420p：每平面按 1/2 宽取样
+                            cb = Int(cbRow[sx >> 1]) - 128
+                            cr = Int(crRow[sx >> 1]) - 128
+                        } else {
+                            // NV12：Cb,Cr 交错
+                            let ux = (sx >> 1) << 1
+                            cb = Int(cbRow[ux]) - 128
+                            cr = Int(crRow[ux + 1]) - 128
+                        }
 
                         var r: Int, g: Int, b: Int
-                        if fullRange {
-                            // full range: Y 0..255
+                        if useFullRange {
                             r = Y + ((91881 * cr) >> 16)
                             g = Y - ((22554 * cb + 46802 * cr) >> 16)
                             b = Y + ((116130 * cb) >> 16)
                         } else {
-                            // video range: Y 16..235, CbCr 16..240
                             let c = Y - 16
                             r = (298 * c + 409 * cr + 128) >> 8
                             g = (298 * c - 100 * cb - 208 * cr + 128) >> 8
@@ -203,9 +252,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
             }
             filled = true
         } else if let base = CVPixelBufferGetBaseAddress(px) {
-            // ---- packed 格式兜底：BGRA / BGRX ----
+            // ---- packed 格式兜底：按像素格式取正确的通道顺序 ----
+            // 之前一律当成 BGRA 处理，遇到 ARGB/RGBA 时 R 和 B 会取错，
+            // 正好表现为「棋子位置对，但兵种和红黑全错」。
             let bpr = CVPixelBufferGetBytesPerRow(px)
             let src = base.assumingMemoryBound(to: UInt8.self)
+            var iR = 2, iG = 1, iB = 0          // 默认 BGRA / BGRX
+            if fmt == kCVPixelFormatType_32ARGB {
+                iR = 1; iG = 2; iB = 3          // A R G B
+            } else if fmt == kCVPixelFormatType_32RGBA {
+                iR = 0; iG = 1; iB = 2          // R G B A
+            }
             out.withUnsafeMutableBytes { raw in
                 guard let dst = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
                 for y in 0..<dh {
@@ -213,9 +270,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
                     let dRow = dst + y * rowBytes
                     for x in 0..<dw {
                         let p = sRow + (x * downscale) * 4
-                        dRow[x * 4 + 0] = p[2]   // R
-                        dRow[x * 4 + 1] = p[1]   // G
-                        dRow[x * 4 + 2] = p[0]   // B
+                        dRow[x * 4 + 0] = p[iR]
+                        dRow[x * 4 + 1] = p[iG]
+                        dRow[x * 4 + 2] = p[iB]
                         dRow[x * 4 + 3] = 255
                     }
                 }
@@ -225,6 +282,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         guard filled else { return nil }
         return Frame(width: dw, height: dh, data: out)
+    }
+
+    private var loggedFormat = false
+
+    private static func fourCC(_ v: OSType) -> String {
+        let b = [UInt8((v >> 24) & 255), UInt8((v >> 16) & 255), UInt8((v >> 8) & 255), UInt8(v & 255)]
+        return String(bytes: b, encoding: .ascii) ?? "\(v)"
     }
 }
 
