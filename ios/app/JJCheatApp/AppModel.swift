@@ -161,18 +161,60 @@ final class AppModel: ObservableObject {
     /// 最近一帧的原始数据（自动校准要用）
     private var lastRawFrame: (data: Data, width: Int, height: Int)?
 
-    /// 自动校准：从最新一帧里自动找出棋盘四角，不需要手点
+    /// 自动校准：从历史帧里找一张能检测出棋盘的帧来标定
     func autoCalibrate() -> (ok: Bool, message: String) {
-        guard let f = lastRawFrame else {
-            return (false, "还没有画面。先开录屏，等诊断卡里「画面帧」大于 0")
+        // 先试当前最新帧
+        if let f = lastRawFrame,
+           let c = JJEngine.shared.autoDetectBoard(pixels: f.data, width: f.width, height: f.height),
+           Self.cornersSane(c, w: f.width, h: f.height) {
+            applyCalibration(c)
+            let cw = (c[1][0] - c[0][0]) / 8
+            return (true, String(format: "自动校准成功：格宽 %.1f px", cw))
         }
-        guard let corners = JJEngine.shared.autoDetectBoard(pixels: f.data, width: f.width, height: f.height) else {
-            return (false, "没找到棋盘。请让整个棋盘完整出现在画面里（别被裁掉边），再点一次")
+        // 再往回翻历史帧（切回 App 后最新帧是自拍，棋盘在历史里）
+        for snap in frameHistory.reversed() {
+            guard let cg = snap.image.cgImage else { continue }
+            if let px = Self.rgbaData(from: cg),
+               let c = JJEngine.shared.autoDetectBoard(pixels: px, width: cg.width, height: cg.height),
+               Self.cornersSane(c, w: cg.width, h: cg.height) {
+                applyCalibration(c)
+                let cw = (c[1][0] - c[0][0]) / 8
+                return (true, String(format: "从历史画面自动校准成功：格宽 %.1f px", cw))
+            }
         }
-        applyCalibration(corners)
-        let w = corners[1][0] - corners[0][0]
-        let h = corners[3][1] - corners[0][1]
-        return (true, String(format: "自动校准成功：格宽 %.1f px、格高 %.1f px", w / 8, h / 9))
+        return (false, "没找到棋盘。让整个棋盘完整出现在画面里，等 2 秒它会自动识别，不用点按钮")
+    }
+
+    /// 四角合理性校验：都在画面内、格宽够大、长宽比正常
+    static func cornersSane(_ c: [[Double]], w: Int, h: Int) -> Bool {
+        guard c.count == 4 else { return false }
+        for p in c {
+            if p.count < 2 { return false }
+            if p[0] < 2 || p[1] < 2 || p[0] > Double(w) - 2 || p[1] > Double(h) - 2 { return false }
+        }
+        let cw = (c[1][0] - c[0][0]) / 8
+        let ch = (c[3][1] - c[0][1]) / 9
+        if cw < 12 || ch < 12 { return false }
+        let ratio = ch / cw
+        if ratio < 0.6 || ratio > 1.7 { return false }
+        return true
+    }
+
+    /// CGImage -> RGBA Data
+    static func rgbaData(from cg: CGImage) -> Data? {
+        let w = cg.width, h = cg.height
+        guard w > 0, h > 0 else { return nil }
+        var out = Data(count: w * h * 4)
+        out.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            let cs = CGColorSpaceCreateDeviceRGB()
+            guard let ctx = CGContext(data: base, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: cs,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return out
     }
 
     /// 清空历史帧（每次开始校准时调用，避免拿到上一次的旧画面）
@@ -210,8 +252,25 @@ final class AppModel: ObservableObject {
             }
         }
 
+        // ============================================================
+        // ★ 全自动校准：不需要用户点任何按钮
+        //   你在 JJ象棋 界面时，帧照样一直传回来，
+        //   后台每 8 帧尝试检测一次棋盘，检测到就自动标定。
+        // ============================================================
+        if !calibrated && receivedFrames % 8 == 0 {
+            if let c = JJEngine.shared.autoDetectBoard(pixels: frame.data,
+                                                       width: frame.width,
+                                                       height: frame.height),
+               Self.cornersSane(c, w: frame.width, h: frame.height) {
+                applyCalibration(c)
+                let cw = (c[1][0] - c[0][0]) / 8
+                let ch = (c[3][1] - c[0][1]) / 9
+                status = String(format: "✅ 已自动识别棋盘位置（格宽 %.1f px）", cw)
+                NSLog("[JJCheat] 自动校准成功 %.1f x %.1f", cw, ch)
+            }
+        }
+
         guard calibrated else {
-            // 还没校准也要让浮窗显示状态，但别每帧都重绘
             if receivedFrames % 15 == 0 { refreshHUD() }
             return
         }

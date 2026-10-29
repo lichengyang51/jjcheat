@@ -97,14 +97,14 @@ struct ContentView: View {
                         )
                     }
 
-                    stepCard(num: "②", title: "校准棋盘",
-                             desc: "棋盘位置固定，直接点「自动校准」即可。找不到再用手动校准") {
+                    stepCard(num: "②", title: "校准棋盘（全自动）",
+                             desc: "开着录屏切到 JJ象棋，程序会在后台自动认出棋盘位置，你什么都不用点。等状态变成「已自动识别棋盘位置」就成功了") {
                         Button {
                             let r = model.autoCalibrate()
                             alertText = r.message
                             showAlert = true
                         } label: {
-                            Label("自动校准（推荐）", systemImage: "wand.and.stars")
+                            Label("立即检测一次（可选）", systemImage: "wand.and.stars")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                                 .background(Color.green.opacity(0.85))
@@ -126,8 +126,7 @@ struct ContentView: View {
                             }
                             showCalibration = true
                         } label: {
-                            Label(model.calibrated ? "手动重新校准" : "手动校准（兜底）",
-                                  systemImage: "viewfinder")
+                            Label("手动校准（兜底）", systemImage: "viewfinder")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                                 .background(Color.blue.opacity(0.85))
