@@ -370,11 +370,10 @@ final class AppModel: ObservableObject {
         fromSq = JJEngine.int(res, "from", -1)
         toSq = JJEngine.int(res, "to", -1)
 
-        let sideToMove = JJEngine.str(res, "sideToMove", "red")
+        let sideToMove = JJEngine.str(res, "sideToMove", mySide)
         sideText = (sideToMove == "red") ? "红方" : "黑方"
 
-        // ★ 自动判定我执红还是执黑：
-        //   棋盘最下方那排永远是自己这边，程序直接看那排棋子的颜色。
+        // ★ 自动判定我执红还是执黑（JS 端已按颜色判好，这里同步过来）
         let detected = JJEngine.str(res, "mySide")
         if (detected == "red" || detected == "black") && detected != mySide {
             mySide = detected
@@ -382,14 +381,9 @@ final class AppModel: ObservableObject {
             NSLog("[JJCheat] 自动识别执子方 = %@", detected)
         }
 
-        isMyTurn = (sideToMove == mySide)
-
-        // 轮到我方才显示建议；对方回合只提示「等对方走」
-        if isMyTurn {
-            moveText = JJEngine.str(res, "suggestChinese")
-        } else {
-            moveText = ""
-        }
+        // 引擎固定站在我方算，所以永远算「我的回合」
+        isMyTurn = true
+        moveText = JJEngine.str(res, "suggestChinese")
 
         detail = "\(sideText)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
 
@@ -410,7 +404,9 @@ final class AppModel: ObservableObject {
             return statusKind == 3 ? "没找到棋盘" : "找棋盘中…"
         }
         if !learned { return "学棋子中…" }
-        if !isMyTurn { return "等对方走" }
+        // 不再因为「轮到对方」就把建议藏起来。
+        // 之前 sideToMove 和 mySide 不同步，导致明明是我方走却一直显示「等对方走」。
+        // 引擎现在固定站在我方算，有招就直接显示。
         if moveText.isEmpty { return "识别中…" }
         return moveText
     }
@@ -421,7 +417,6 @@ final class AppModel: ObservableObject {
             return "切到 JJ象棋，等几秒自动识别"
         }
         if !learned { return "请停在标准开局画面" }
-        if !isMyTurn { return "对方回合 · 你执\(mySide == "red" ? "红" : "黑")" }
         if !opponentMove.isEmpty { return "对方刚走 \(opponentMove) · 你执\(mySide == "red" ? "红" : "黑")" }
         return "你执\(mySide == "red" ? "红" : "黑")"
     }

@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T13:05:16.420Z
+ *  生成时间: 2026-10-29T13:10:12.188Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -2533,7 +2533,6 @@ var JJEngine = {
     session.recognizer.learnBackground(stats, []);
 
     var startMap = TRK.startPieceMap();
-    var expectedBoard = startMap;   // 标准开局的兵种编码表
 
     function compare(a, b) {
       var d = 0;
@@ -2541,34 +2540,51 @@ var JJEngine = {
       return d;
     }
 
-    // ★ 朝向判定（关键：不能「学的时候翻一次、验的时候再翻回来」，那样自己抵消）
-    //   做法：用两套标签各学一次模板，各自直接和标准开局的兵种表比对。
-    //     标签 = 标准布局（红在下）  → 若画面确实是红在下，误差小
-    //     标签 = 翻转布局（黑在下）  → 若画面其实是黑在下，误差小
-    //   标签和画面匹配的那一套，误差必然更小。
+    // ★ 朝向判定：用「颜色分类」而不是「翻转标签再学一遍」。
+    //   为什么不能用模板：模板的红黑是靠标签给的，标签一翻，识别结果也跟着翻，
+    //   两边永远打平（实测 diffNormal=0 且 diffFlipped=0，完全分不出来）。
+    //   颜色分类只看像素本身（棋子暖色、棋盘冷色；红字发红、黑字不发红），
+    //   和标签无关，才是可靠的物理判据。
+    var colorCls = null;
+    try { colorCls = session.recognizer.classifyByColor(stats); } catch (e) { colorCls = null; }
 
-    // A：假定画面是标准朝向（红在下）
-    session.flipped = false;
-    session.recognizer.learnTemplates(stats, startMap);
-    var clsA = session.recognizer.classify(stats);
-    var diffNormal = (clsA && clsA.codes) ? compare(clsA.codes, expectedBoard) : 999;
-
-    // B：假定画面是翻转朝向（黑在下）
-    session.recognizer.learnTemplates(stats, flipPieceMap(startMap));
-    var clsB = session.recognizer.classify(stats);
-    var diffFlipped = (clsB && clsB.codes) ? compare(clsB.codes, expectedBoard) : 999;
-
-    var verifyDiff;
-    if (diffFlipped < diffNormal) {
-      session.flipped = true;
-      session.recognizer.learnTemplates(stats, flipPieceMap(startMap));
-      verifyDiff = diffFlipped;
-    } else {
-      session.flipped = false;
-      session.recognizer.learnTemplates(stats, startMap);
-      verifyDiff = diffNormal;
+    var bRed = 0, bBlk = 0, tRed = 0, tBlk = 0;
+    if (colorCls) {
+      for (var c = 0; c < 9; c++) {
+        var vb = colorCls.grid[9 * 9 + c];
+        if (vb === 1) bRed++; else if (vb === 2) bBlk++;
+        var vt = colorCls.grid[0 * 9 + c];
+        if (vt === 1) tRed++; else if (vt === 2) tBlk++;
+      }
     }
-    var ok = (verifyDiff <= 6);
+
+    // 手机屏幕上「棋盘最下方」永远是自己这边：
+    //   下排红多 → 我执红（红在下）
+    //   下排黑多 → 我执黑（JJ象棋 会翻转棋盘）
+    // 上下都判不出来时，退回「谁在下方看谁」，再不行默认红。
+    var flipped = false;
+    if (colorCls) {
+      if (bBlk > bRed + 2) {
+        flipped = true;                    // 下排明显是黑
+      } else if (bRed > bBlk + 2) {
+        flipped = false;                   // 下排明显是红
+      } else {
+        // 下排看不清，用上排反推
+        flipped = (tRed > tBlk + 2);
+      }
+    }
+    session.flipped = flipped;
+
+    session.recognizer.learnTemplates(stats, flipped ? flipPieceMap(startMap) : startMap);
+
+    // 验证：用刚学到的模板识别同一帧，和标准开局比（翻转时先翻回标准坐标）
+    var clsV = session.recognizer.classify(stats);
+    var verifyDiff = 999;
+    if (clsV && clsV.codes) {
+      var got = flipped ? flipCodes(clsV.codes) : clsV.codes;
+      verifyDiff = compare(got, startMap);
+    }
+    var ok = (verifyDiff <= 8);
 
     var learned = session.recognizer.bgModel ? 1 : 0;
     var warmTh = session.recognizer.bgModel ? session.recognizer.bgModel.warmThreshold : -1;
@@ -2582,8 +2598,12 @@ var JJEngine = {
       isOpening: ok,
       flipped: session.flipped ? 1 : 0,
       mySide: session.flipped ? 'black' : 'red',
-      diffNormal: diffNormal,
-      diffFlipped: diffFlipped
+      diffNormal: verifyDiff,
+      diffFlipped: flipped ? verifyDiff : -1,
+      bottomRed: bRed,
+      bottomBlack: bBlk,
+      topRed: tRed,
+      topBlack: tBlk
     };
   },
 
@@ -2712,23 +2732,26 @@ var JJEngine = {
 
       if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
-        session.lastBoardFenAt = nowMs;
         session.lastFenUpdateTime = nowMs;
-        session.sideToMoveNow = mySideDetected;
         out.moveDetected = true;
         session.lastResult = null;    // 强制重算
       } else if (!session.lastBoardFen) {
         // 第一次进来先落地，不占用限流
         session.lastBoardFen = boardFen;
         session.lastFenUpdateTime = nowMs;
-        session.sideToMoveNow = mySideDetected;
         out.moveDetected = true;
         session.lastResult = null;
       }
       codesOk = true;   // 校验通过就算识别有效（限流只是不换局面，不代表识别失败）
+
+      // FEN 的走子方一律取「我方」。
+      // 之前绕了一个 session.sideToMoveNow 变量，它和 mySide 会不同步，
+      // 结果就是「显示我执红、却一直说等对方走」。
+      // 你的诉求是「告诉我我该走哪步」，所以引擎永远站在我方算。
       directFen = session.lastBoardFen + ' ' +
-        (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
+        (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.fen = directFen;
+      out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
     } else if (cls.codes && !validateCodes(cls.codes)) {
       // 识别出的局面不合法（缺将/多子），明确告知，不要拿错局面算棋
