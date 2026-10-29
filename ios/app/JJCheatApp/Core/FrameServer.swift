@@ -2,8 +2,18 @@
 //  FrameServer.swift
 //  JJCheatApp —— 接收 Broadcast Extension 发来的帧
 //
-//  监听 127.0.0.1:9527，按 JJFrameHeader 拆包，
-//  回调到主线程（只保留最新一帧，旧的直接丢）。
+//  【血泪教训】
+//  Data.subdata(in:) 接受的是「绝对索引」，而 Data.removeFirst() 会把
+//  startIndex 往后推。上一版写成
+//        pending.subdata(in: JJProto.headerSize..<total)
+//        pending.removeFirst(total)
+//  第二轮循环时 startIndex 已经不是 0，range 立刻越界，
+//  Swift 运行时 brk 1（EXC_BREAKPOINT / SIGTRAP），整个 App 被干掉。
+//
+//  现在改成：
+//    · 用一个 consumed 游标 + pending.startIndex 做基准，绝不假设索引从 0 开始
+//    · 处理完用 Data(dropFirst(consumed)) 重建，startIndex 归零
+//    · payload 用切片再复制成独立 Data，避免持有 pending 的引用
 //
 
 import Foundation
@@ -20,11 +30,8 @@ final class FrameServer {
 
     static let shared = FrameServer()
 
-    /// 收到新帧（主线程回调）
     var onFrame: ((Frame) -> Void)?
-    /// 收到心跳包（主线程回调）——证明扩展活着
     var onHeartbeat: (() -> Void)?
-    /// 连接状态变化（主线程回调）
     var onStateChange: ((Bool) -> Void)?
 
     private var listener: NWListener?
@@ -36,8 +43,8 @@ final class FrameServer {
     private(set) var isRunning = false
     private(set) var frameCount: UInt64 = 0
     private(set) var heartbeatCount: UInt64 = 0
-    private(set) var startHeartbeats: UInt64 = 0     // broadcastStarted 发的
-    private(set) var timerHeartbeats: UInt64 = 0     // 每秒定时发的
+    private(set) var startHeartbeats: UInt64 = 0
+    private(set) var timerHeartbeats: UInt64 = 0
     private(set) var badPacketCount: UInt64 = 0
     private(set) var lastFrameSize: CGSize = .zero
 
@@ -58,8 +65,13 @@ final class FrameServer {
                 switch state {
                 case .ready:
                     self.isRunning = true
+                    NSLog("[JJCheat] FrameServer 监听 127.0.0.1:\(JJProto.port)")
                     DispatchQueue.main.async { self.onStateChange?(true) }
-                case .failed, .cancelled:
+                case .failed(let e):
+                    NSLog("[JJCheat] FrameServer 失败: \(e)")
+                    self.isRunning = false
+                    DispatchQueue.main.async { self.onStateChange?(false) }
+                case .cancelled:
                     self.isRunning = false
                     DispatchQueue.main.async { self.onStateChange?(false) }
                 default:
@@ -68,7 +80,6 @@ final class FrameServer {
             }
             l.start(queue: queue)
             listener = l
-            NSLog("[JJCheat] FrameServer 监听 127.0.0.1:\(JJProto.port)")
         } catch {
             NSLog("[JJCheat] FrameServer 启动失败: \(error)")
         }
@@ -79,10 +90,10 @@ final class FrameServer {
         listener = nil
         connections.forEach { $0.cancel() }
         connections.removeAll()
+        pending.removeAll(keepingCapacity: false)
         isRunning = false
     }
 
-    /// 从后台恢复时用：彻底重建监听（旧 socket 可能已经死了但 isRunning 还是 true）
     func restart() {
         stop()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
@@ -99,6 +110,7 @@ final class FrameServer {
             switch state {
             case .ready:
                 NSLog("[JJCheat] Extension 已连接")
+                self.pending.removeAll(keepingCapacity: false)
                 DispatchQueue.main.async { self.onStateChange?(true) }
             case .failed, .cancelled:
                 self.connections.removeAll { $0 === conn }
@@ -125,32 +137,44 @@ final class FrameServer {
         }
     }
 
-    // MARK: - 拆包
+    // MARK: - 拆包（索引安全版）
 
     private func appendAndDrain(_ data: Data) {
         pending.append(data)
+
         if pending.count > maxPending {
-            // 数据错位了，整段丢掉重来
+            NSLog("[JJCheat] pending 超限，丢弃重来")
             pending.removeAll(keepingCapacity: true)
             return
         }
 
+        var consumed = 0                 // 相对已处理偏移
+        let base = pending.startIndex    // 关键：以真实起点为基准
+        let end = pending.endIndex
+
         while true {
-            guard pending.count >= JJProto.headerSize else { return }
-            let headerData = pending.prefix(JJProto.headerSize)
-            guard let h = JJFrameHeader.decode(Data(headerData)) else {
-                // 魔数对不上 → 丢一个字节重新同步
+            let remain = pending.count - consumed
+            guard remain >= JJProto.headerSize else { break }
+
+            let hStart = base + consumed
+            let hEnd = hStart + JJProto.headerSize
+            guard hEnd <= end else { break }
+
+            // 只用明确落在范围内的切片，绝不传裸常量给 subdata
+            guard let h = JJFrameHeader.decode(Data(pending[hStart..<hEnd])) else {
                 badPacketCount += 1
-                pending.removeFirst()
+                consumed += 1            // 逐字节重新同步
                 continue
             }
-            let total = JJProto.headerSize + Int(h.payloadLen)
-            guard pending.count >= total else { return }
 
-            let payload = pending.subdata(in: JJProto.headerSize..<total)
-            pending.removeFirst(total)
+            let payloadLen = Int(h.payloadLen)
+            let total = JJProto.headerSize + payloadLen
+            guard remain >= total else { break }        // 半包，等下一批数据
 
-            // 心跳包：只证明扩展活着，不带画面
+            let pStart = hStart + JJProto.headerSize
+            let pEnd = pStart + payloadLen
+            guard pEnd <= end else { break }
+
             if h.isHeartbeat {
                 heartbeatCount += 1
                 switch h.heartbeatKind {
@@ -158,21 +182,25 @@ final class FrameServer {
                 case 2: timerHeartbeats += 1
                 default: break
                 }
-                DispatchQueue.main.async { [weak self] in
-                    self?.onHeartbeat?()
-                }
-                continue
+                DispatchQueue.main.async { [weak self] in self?.onHeartbeat?() }
+            } else {
+                // 切片复制成独立 Data，避免继续持有 pending 内部引用
+                let payload = Data(pending[pStart..<pEnd])
+                frameCount += 1
+                lastFrameSize = CGSize(width: Int(h.width), height: Int(h.height))
+                let frame = Frame(data: payload,
+                                  width: Int(h.width),
+                                  height: Int(h.height),
+                                  timestamp: Date())
+                DispatchQueue.main.async { [weak self] in self?.onFrame?(frame) }
             }
 
-            frameCount += 1
-            lastFrameSize = CGSize(width: Int(h.width), height: Int(h.height))
-            let frame = Frame(data: payload,
-                              width: Int(h.width),
-                              height: Int(h.height),
-                              timestamp: Date())
-            DispatchQueue.main.async { [weak self] in
-                self?.onFrame?(frame)
-            }
+            consumed += total
+        }
+
+        if consumed > 0 {
+            // dropFirst 出来的还是 slice，再包一层 Data 让 startIndex 归零
+            pending = Data(pending.dropFirst(consumed))
         }
     }
 }
