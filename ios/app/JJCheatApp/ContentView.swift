@@ -223,7 +223,7 @@ struct ContentView: View {
                 Text("通道诊断").font(.caption.bold()).foregroundColor(.secondary)
                 Spacer()
                 // 构建标记：每编译一次都不一样，用来确认装的是哪一版
-                Text("构建 " + CompactHUDView.buildTag)
+                Text("构建 " + HUDTextView.buildTag)
                     .font(.caption2.monospacedDigit())
                     .foregroundColor(.blue)
             }

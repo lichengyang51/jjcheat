@@ -424,7 +424,7 @@ final class AppModel: ObservableObject {
     /// 把当前状态推到浮窗
     func refreshHUD() {
         guard PiPController.shared.isActive else { return }
-        // 状态色：就绪且轮到我 → 绿；找棋盘/学棋子中 → 蓝；失败 → 红；其它 → 灰
+        // 状态色：就绪 → 绿；找棋盘/学棋子中 → 蓝；失败 → 红；其它 → 灰
         var kind = 0
         if statusKind == 3 {
             kind = 3
@@ -441,7 +441,8 @@ final class AppModel: ObservableObject {
             sideText: sideText,
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
-            statusKind: kind
+            statusKind: kind,
+            fen: fen
         )
     }
 

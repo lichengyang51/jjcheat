@@ -2,8 +2,8 @@
 //  PiPController.swift
 //  JJCheatApp —— 画中画浮窗
 //
-//  用 AVPictureInPictureVideoCallViewController 承载一个极简文字视图。
-//  浮窗体积小，飘在 JJ象棋 上方，只告诉你「走哪一步」和「局势如何」。
+//  浮窗内容 = 顶部文字条 + 实时棋盘。
+//  棋盘按识别结果重绘，用户拿真实棋盘一对比，就能立刻看出有没有识别错。
 //
 
 import UIKit
@@ -18,11 +18,11 @@ final class PiPController: NSObject {
     private var host: AVPictureInPictureVideoCallViewController?
     private var container: UIViewController?
 
-    /// 极简文字浮窗
-    let hudView = CompactHUDView(frame: CGRect(x: 0, y: 0, width: 300, height: 118))
+    /// 文字条 + 棋盘
+    let hudView = ChessHUDView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
 
-    /// 浮窗尺寸（point）。宽扁形，占屏幕一小块
-    var preferredSize = CGSize(width: 300, height: 118)
+    /// 浮窗尺寸：宽 320，文字条 62 + 棋盘 338
+    var preferredSize = CGSize(width: 320, height: 400)
 
     private(set) var isActive = false
     var onStateChange: ((Bool, String?) -> Void)?
@@ -43,7 +43,7 @@ final class PiPController: NSObject {
         vc.view.backgroundColor = UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 1)
 
         let child = UIViewController()
-        child.view.backgroundColor = .clear
+        child.view.backgroundColor = UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 1)
         hudView.frame = CGRect(origin: .zero, size: preferredSize)
         hudView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         child.view.addSubview(hudView)
@@ -90,20 +90,21 @@ final class PiPController: NSObject {
                 sideText: String,
                 hintText: String,
                 hasMove: Bool,
-                statusKind: Int) {
-        hudView.moveText = moveText
-        hudView.scoreText = scoreText
-        hudView.winrate = winrate
-        hudView.depth = depth
-        hudView.sideText = sideText
-        hudView.hintText = hintText
-        hudView.hasMove = hasMove
-        hudView.statusKind = statusKind
+                statusKind: Int,
+                fen: String) {
+        hudView.apply(moveText: moveText,
+                      scoreText: scoreText,
+                      winrate: winrate,
+                      depth: depth,
+                      sideText: sideText,
+                      hintText: hintText,
+                      hasMove: hasMove,
+                      statusKind: statusKind,
+                      fen: fen)
     }
 
     // MARK: - 音频会话
 
-    /// 画中画要持续存在，需要活跃的 audio session
     private func configureAudioSession() {
         let s = AVAudioSession.sharedInstance()
         do {
