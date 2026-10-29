@@ -586,28 +586,16 @@ var JJEngine = {
     //   FEN 每帧都不一样，着法就会乱跳（实测同一开局给出过相三进五/兵四进一/兵三进一三个答案）。
     var directFen = null;
     var codesOk = false;
-    var codesHash = 0;
-    if (cls.codes) {
-      for (var ci = 0; ci < 90; ci++) {
-        codesHash = ((codesHash * 31) + cls.codes[ci]) | 0;
-      }
-    }
-    if (session.lastCodesHash === codesHash) {
-      session.codesStable = (session.codesStable || 0) + 1;
-    } else {
-      session.codesStable = 0;
-      session.lastCodesHash = codesHash;
-    }
-    // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
-    // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
-    var codesSettled = (session.codesStable >= 2);
 
-    // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
-    //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
-    //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
-    //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
-    var firstLatch = !session.lastBoardFen;
-    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
+    // 【重要】这里原来要求「连续 3 帧识别结果完全一致」才更新局面。
+    //   这个门槛在真机上会造成死锁：
+    //   一次搜索要 0.2~1.2 秒，期间新帧全被丢掉，所以两次「真正被处理」的帧
+    //   相隔一秒多、中间跳过十几帧。只要棋局有任何变化，计数就被清零，
+    //   「连续 3 帧」永远凑不齐 —— 于是局面一次都不更新，
+    //   浮窗永远停在最早 latch 到的那一帧（很可能是个垃圾盘面）。
+    //   抖动问题已经由「逐格置信度 + 保留上一稳定值」和 350ms 限流挡住了，
+    //   这道门槛只剩坏处，所以整个去掉。
+    if (cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
       // 局面更新限流：最多每 350ms 换一次。（原来 700ms，落子后光这道闸就要多等半秒）
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
@@ -654,7 +642,7 @@ var JJEngine = {
       }
     }
     out.codesValid = codesOk ? 1 : 0;
-    out.codesSettled = codesSettled ? 1 : 0;
+    out.codesSettled = 1;   // 门槛已去掉，有结果就算可用
 
     // 2) 到了我方走 → 算棋
     //
