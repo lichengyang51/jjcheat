@@ -25,6 +25,11 @@ final class CompactHUDView: UIView {
     /// 是否为「有效着法」状态（决定主文字颜色）
     var hasMove: Bool = false { didSet { setNeedsDisplay() } }
 
+    /// 构建标记（从 Info.plist 的 CFBundleVersion 读，每次编译都不一样）
+    static let buildTag: String = {
+        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+    }()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
@@ -105,5 +110,14 @@ final class CompactHUDView: UIView {
             (hintText as NSString).draw(at: CGPoint(x: 14, y: mainSize * 0.28 + mainSz.height - 2),
                                         withAttributes: hintAttrs)
         }
+
+        // ---- 构建标记（右上角小字，用来确认装的是哪一版）----
+        let tagAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.monospacedDigitSystemFont(ofSize: max(8, h * 0.095), weight: .regular),
+            .foregroundColor: UIColor(red: 0.42, green: 0.44, blue: 0.50, alpha: 1)
+        ]
+        let tag = Self.buildTag as NSString
+        let tagSz = tag.size(withAttributes: tagAttrs)
+        tag.draw(at: CGPoint(x: w - tagSz.width - 10, y: 5), withAttributes: tagAttrs)
     }
 }

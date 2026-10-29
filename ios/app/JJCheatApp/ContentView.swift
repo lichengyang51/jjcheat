@@ -207,7 +207,14 @@ struct ContentView: View {
     /// 诊断卡：卡在哪一环一眼看穿
     private var diagCard: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("通道诊断").font(.caption.bold()).foregroundColor(.secondary)
+            HStack {
+                Text("通道诊断").font(.caption.bold()).foregroundColor(.secondary)
+                Spacer()
+                // 构建标记：每编译一次都不一样，用来确认装的是哪一版
+                Text("构建 " + CompactHUDView.buildTag)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.blue)
+            }
             row("后台接收", model.serverRunning ? "运行中 127.0.0.1:9527" : "已停止")
             row("录屏扩展", model.connected ? "已接入" : "未接入")
             row("启动心跳", model.startHB > 0 ? "\(model.startHB) 个  (扩展已启动)"
