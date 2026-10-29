@@ -323,9 +323,16 @@ class BoardRecognizer {
    * 统计特征也从同一批采样点累计，口径一致。
    */
   sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
-    let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0;
+    let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0, skipped = 0;
     const PW = 16;
     let patchW = null, patchR = null;
+
+    // 纯绿像素过滤器：
+    //   JJ象棋 会在「可走位置」画绿色小点（正好落在格子交叉点上），
+    //   被吃的棋子也会套绿色高亮圈。这些绿色既不是棋子也不是棋盘，
+    //   混进统计里会把「空格」误判成「有子」，进而把 FEN 算错、
+    //   着法在「相七进五 / 仕六进五」之间乱跳。
+    const isPureGreen = (R, G, B) => (G > R + 30 && G > B + 30 && G > 90);
 
     if (wantPatch) {
       patchW = new Uint8Array(PW * PW);
@@ -339,16 +346,19 @@ class BoardRecognizer {
           if (sx < 1 || sy < 1 || sx >= w - 1 || sy >= h - 1) continue;
           const i = (sy * w + sx) * 4;
           const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+
+          const idx = py * PW + px;
+          if (isPureGreen(R, G, B)) {
+            // 绿点/绿圈：patch 里留 0（当作「不暖、不红」），统计也不计入
+            skipped++;
+            continue;
+          }
+
           const L = 0.299 * R + 0.587 * G + 0.114 * B;
           const rb = R - B;
           const isWarm = (rb > 22 && R > 80);
           const isRed = (R > 85 && (R - G) > 45 && rb > 45);
 
-          // 双通道 patch：
-          //   W 通道 = 暖色掩码 → 区分「有子 / 空」（棋子棕黄 vs 棋盘灰绿）
-          //   R 通道 = 红色掩码 → 区分「红子 / 黑子」（红字发红、黑字不发红）
-          // 单用灰度会丢掉颜色，单用暖色会丢掉红黑，必须两个都要。
-          const idx = py * PW + px;
           patchW[idx] = isWarm ? 255 : 0;
           patchR[idx] = isRed ? 255 : 0;
 
@@ -370,6 +380,7 @@ class BoardRecognizer {
           if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
           const i = (y * w + x) * 4;
           const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          if (isPureGreen(R, G, B)) { skipped++; continue; }
           const L = 0.299 * R + 0.587 * G + 0.114 * B;
           sumL += L; n++;
           const rb = R - B;
@@ -382,7 +393,7 @@ class BoardRecognizer {
     }
 
     if (n === 0) {
-      return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, patchW, patchR };
+      return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, skipped, patchW, patchR };
     }
     return {
       meanL: sumL / n,
@@ -391,6 +402,7 @@ class BoardRecognizer {
       brightR: bright / n,
       warmR: warm / n,
       n,
+      skipped,
       patchW,
       patchR
     };
