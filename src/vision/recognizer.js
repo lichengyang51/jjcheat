@@ -248,31 +248,121 @@ class BoardRecognizer {
     return this.bgModel;
   }
 
-  /** 从已知局面学习棋子模板（用于歧义消解 + 兵种校验） */
-  learnTemplates(stats, boardPieceAt) {
-    const tpl = [];
-    for (let sq = 0; sq < 90; sq++) {
-      const t = boardPieceAt[sq];
-      if (!t) continue;
-      const s = stats[sq];
-      if (!s || !s.patch) continue;
-      tpl.push({ key: t, sq, gray: s.patch, w: 1, redR: s.redR, darkR: s.darkR });
+  /**
+   * 归一化 patch：减去均值再除以标准差
+   * 这样比对的只是「图案形状」，跟整体亮度、色调、高光完全无关
+   */
+  normalizePatch(patch) {
+    const n = patch.length;
+    if (!n) return null;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += patch[i];
+    const mean = sum / n;
+    let varSum = 0;
+    for (let i = 0; i < n; i++) {
+      const d = patch[i] - mean;
+      varSum += d * d;
     }
-    this.templates = tpl;
-    return tpl;
+    const std = Math.sqrt(varSum / n) || 1;
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = (patch[i] - mean) / std;
+    return out;
   }
 
   /**
-   * 三分类：返回 Int8Array(90)，0=空 1=红 2=黑
+   * 从开局画面采集模板。
    *
-   * 有子：只看「暖色度」（棋子是棕黄盘面，棋盘是灰绿底），
-   *       阈值由 learnBackground 的 Otsu 双峰自动给出。
-   * 红黑：只看「红色像素占比」。
-   *       曾经同时比 darkR，结果红字 (168,28,28) 的亮度算出来是 69.8，
-   *       低于深色阈值 72，红字被同时算成「红」和「深」，最后反投给黑方。
-   *       黑字永远不会发红，所以只看红就够了。
+   * 关键优势：中国象棋开局 32 个棋子的位置和身份是固定的死数，
+   * 所以这里采到的每一个模板，它的「兵种 + 阵营」标签都是确定的。
+   * 后面每帧拿格子去和这些模板比对，就不依赖任何颜色阈值了。
+   *
+   * @param {Array} stats sampleAll(wantPatch=true) 的结果
+   * @param {Array} boardPieceAt 90 个格子的棋子编码（0 = 空）
+   */
+  learnTemplates(stats, boardPieceAt) {
+    const buckets = {};   // key -> [归一化向量]
+    for (let sq = 0; sq < 90; sq++) {
+      const s = stats[sq];
+      if (!s || !s.patch) continue;
+      const key = boardPieceAt[sq] || 'E';
+      const v = this.normalizePatch(s.patch);
+      if (!v) continue;
+      if (!buckets[key]) buckets[key] = [];
+      buckets[key].push(v);
+    }
+    this.templates = buckets;
+    // 统计一下采到多少
+    let total = 0;
+    for (const k in buckets) total += buckets[k].length;
+    this.templateCount = total;
+    return buckets;
+  }
+
+  /**
+   * 用模板匹配判定一格是什么
+   * @returns {{key:number|string, score:number}}
+   */
+  matchCell(patch) {
+    const v = this.normalizePatch(patch);
+    if (!v || !this.templates) return { key: 'E', score: -2 };
+    const n = v.length;
+    let bestKey = 'E', best = -2;
+    for (const key in this.templates) {
+      const arr = this.templates[key];
+      // 同一兵种可能有多个样本（5 个兵），取最高的那个
+      for (let t = 0; t < arr.length; t++) {
+        const tv = arr[t];
+        let dot = 0;
+        for (let i = 0; i < n; i++) dot += v[i] * tv[i];
+        const ncc = dot / n;      // 归一化互相关，范围约 -1..1
+        if (ncc > best) { best = ncc; bestKey = key; }
+      }
+    }
+    return { key: bestKey, score: best };
+  }
+
+  /**
+   * 模板匹配版三分类
+   * @returns {{grid:Int8Array, conf:Float32Array}}
+   */
+  classifyByTemplate(stats) {
+    const grid = new Int8Array(90);
+    const conf = new Float32Array(90);
+    for (let sq = 0; sq < 90; sq++) {
+      const s = stats[sq];
+      if (!s || !s.patch) { grid[sq] = EMPTY; continue; }
+      const r = this.matchCell(s.patch);
+      conf[sq] = r.score;
+      if (r.key === 'E') {
+        grid[sq] = EMPTY;
+      } else {
+        const code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
+        if (!code || code === 0) { grid[sq] = EMPTY; }
+        else grid[sq] = (code < 8) ? RED_PC : BLK_PC;
+      }
+    }
+    return { grid, conf };
+  }
+
+  /**
+   * 三分类主入口：有模板就走模板匹配，没模板才退回颜色阈值。
+   *
+   * 模板匹配对光照、棋子高光、棋盘皮肤、上一步的绿圈红圈全都免疫，
+   * 因为它比的是「归一化后的图案形状」，不是绝对颜色。
    */
   classify(stats, opts) {
+    if (this.templates) {
+      return this.classifyByTemplate(stats);
+    }
+    return this.classifyByColor(stats, opts);
+  }
+
+  /**
+   * 颜色版三分类（仅在还没采到模板时使用）
+   * 有子：暖色度（棋子棕黄、棋盘灰绿）
+   * 红黑：只看红色占比（黑字永远不发红）
+   */
+  classifyByColor(stats, opts) {
     const o = Object.assign({
       warmTh: 0.20,
       redTh: 0.012,
@@ -283,20 +373,16 @@ class BoardRecognizer {
 
     const grid = new Int8Array(90);
     const conf = new Float32Array(90);
-    const reds = new Float32Array(90);
 
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
       if (!s || s.n === 0) { grid[sq] = EMPTY; continue; }
-
       const occupied = s.warmR >= warmTh;
       conf[sq] = warmTh > 0 ? s.warmR / warmTh : 0;
-      reds[sq] = s.redR;
-
       if (!occupied) { grid[sq] = EMPTY; continue; }
       grid[sq] = (s.redR > o.redTh) ? RED_PC : BLK_PC;
     }
-    return { grid, conf, reds };
+    return { grid, conf };
   }
 
   /** 模板 SAD 匹配，用于歧义消解：返回与给定 patch 最相似的模板 key */

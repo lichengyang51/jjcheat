@@ -180,7 +180,7 @@ var JJEngine = {
     return {
       learned: learned,
       warmThreshold: warmTh,
-      templateCount: session.recognizer.templates ? session.recognizer.templates.length : 0,
+      templateCount: session.recognizer.templateCount || 0,
       verifyDiff: verifyDiff,
       ok: ok,
       isOpening: ok
@@ -209,7 +209,8 @@ var JJEngine = {
     if (!session.recognizer) throw new Error('未标定');
     if (!session.tracker) JJEngine.reset();
 
-    var stats = session.recognizer.sampleAll(pixels, w, h, false);
+    // 模板匹配需要 patch，所以这里必须采
+    var stats = session.recognizer.sampleAll(pixels, w, h, true);
     var cls = session.recognizer.classify(stats);
     var grid = cls.grid;
 
