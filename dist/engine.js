@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T15:18:18.968Z
+ *  生成时间: 2026-10-29T15:21:57.461Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -4200,8 +4200,8 @@ var JJEngine = {
     if (!legalNow) {
       session.legalStreak = 0;
       session.illegalStreak = (session.illegalStreak || 0) + 1;
-      // 连续 40 帧都不合法 → 清掉旧局面，让下一帧合法识别重新落地
-      if (session.illegalStreak > 40) {
+      // 连续 12 帧都不合法 → 清掉旧局面，让下一帧合法识别重新落地（别卡死在一个错盘面上）
+      if (session.illegalStreak > 12) {
         session.lastBoardFen = '';
         session.lastRawFen = '';
         session.lastResult = null;

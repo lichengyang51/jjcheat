@@ -675,8 +675,8 @@ var JJEngine = {
     if (!legalNow) {
       session.legalStreak = 0;
       session.illegalStreak = (session.illegalStreak || 0) + 1;
-      // 连续 40 帧都不合法 → 清掉旧局面，让下一帧合法识别重新落地
-      if (session.illegalStreak > 40) {
+      // 连续 12 帧都不合法 → 清掉旧局面，让下一帧合法识别重新落地（别卡死在一个错盘面上）
+      if (session.illegalStreak > 12) {
         session.lastBoardFen = '';
         session.lastRawFen = '';
         session.lastResult = null;

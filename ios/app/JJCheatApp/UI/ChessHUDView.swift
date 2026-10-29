@@ -141,6 +141,8 @@ final class HUDTextView: UIView {
     var hintText: String = "" { didSet { setNeedsDisplay() } }
     var hasMove: Bool = false { didSet { setNeedsDisplay() } }
     var statusKind: Int = 0 { didSet { setNeedsDisplay() } }
+    /// 自检：子数 + 棋盘第一行 FEN 原文（用来核对 App 拿到的是不是引擎算的那个字符串）
+    var fenTag: String = "" { didSet { setNeedsDisplay() } }
 
     static let buildTag: String = {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
@@ -288,6 +290,18 @@ final class HUDTextView: UIView {
         let tagSz = tag.size(withAttributes: tagAttrs)
         tag.draw(at: CGPoint(x: w - tagSz.width - padX, y: barY - tagSz.height - 2),
                  withAttributes: tagAttrs)
+
+        // 自检行：子数 + 棋盘第一行 FEN 原文
+        // 只要截图上这一行和我算出来的字符串不一样，就说明 App 拿到的 fen
+        // 被改过或没更新，而不是识别错 —— 用来把「识别」和「显示」分开定位。
+        if !fenTag.isEmpty {
+            let fAttrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.monospacedDigitSystemFont(ofSize: 6.5, weight: .regular),
+                .foregroundColor: UIColor(red: 0.58, green: 0.64, blue: 0.78, alpha: 1)
+            ]
+            (fenTag as NSString).draw(at: CGPoint(x: padX, y: barY - tagSz.height - 2),
+                                      withAttributes: fAttrs)
+        }
     }
 }
 
@@ -307,6 +321,16 @@ final class HUDTextView: UIView {
  *  引擎里的 findPipRect 能认出那块米黄并把被盖住的格子判成「未知」。
  * ============================================================ */
 final class ChessHUDView: UIView {
+
+    /// 自检字符串：总子数 + 棋盘第一行 FEN 原文（例如 32 rnbakab1r）
+    static func makeFenTag(_ fen: String) -> String {
+        let layout = fen.split(separator: " ").first.map(String.init) ?? ""
+        guard !layout.isEmpty else { return "" }
+        var n = 0
+        for ch in layout where "RNBAKCPrnbakcp".contains(ch) { n += 1 }
+        let firstRow = layout.split(separator: "/").first.map(String.init) ?? ""
+        return "\(n) \(firstRow)"
+    }
 
     let textView = HUDTextView(frame: .zero)
 
@@ -350,5 +374,6 @@ final class ChessHUDView: UIView {
         // 这样你拿它和真实棋盘一比就知道哪里认错了。
         // （试过直接贴录屏截图，那样和真实棋盘永远一样、根本没有对照意义。）
         boardView.fen = fen
+        textView.fenTag = Self.makeFenTag(fen)
     }
 }
