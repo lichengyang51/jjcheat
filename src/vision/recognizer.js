@@ -765,16 +765,23 @@ class BoardRecognizer {
    */
   constructor(cfg) {
     this.corners = cfg.corners ? cfg.corners.map(p => [p[0], p[1]]) : null;
-    // 0.42：采样区域要能越过「高亮圈」。
-    //   JJ象棋 给上一步走的子套白圈/红圈，圈半径 22~25 像素；
-    //   采样半径若只有 19（0.30），整个采样区都在圈内，白色既不是墨也不暖，
-    //   结果 ink=0 warm=0，炮被直接判成空（实测丢两个炮）。
-    //   放大到 0.42（约 26 像素）就能采到圈外的棋子盘面。
-    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.42;
+    // 采样半径占格距的比例。
+    //
+    // 这个值同时决定「能采到多少字形」和「会不会被高亮圈污染」，实测扫描：
+    //   0.42 → 上一步的高亮圈（半径 22~30 像素）整个落进 patch 外圈，
+    //          红色通道被圈填满，红俥被判成红傌/红仕（实测 5 张图共错 7 格）
+    //   0.34 → 圈在 patch 之外，只采到字形，5 张图 450 格只剩 2 格错
+    //   0.30 → 采得太小，字形边缘被切掉，反而变差
+    // 模板必须用同一个比例训练（tools/gen-templates.mjs）。
+    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.34;
     this.bgModel = cfg.bgModel || null;
     this.lastStats = null;
     // 模板在 patchWeights 构建完才能归一化，所以先占位、后面再装
     this.templates = null;
+    // 低置信度格子再做多尺度重采样。
+    // 默认关闭 —— 实测在 0.34 半径下它反而把本来认对的红子改成错的
+    // （u_dots 从 0 错变成 2 错），逐格置信度 + 保留上一稳定值那套已经够用。
+    this.enableLowConfRefine = !!cfg.enableLowConfRefine;
 
     // 径向权重：中心权重高、边缘权重低。
     // 空格的 patch 边缘是棋盘网格线（深色直线），棋子的边缘是圆形描边，
@@ -1009,7 +1016,7 @@ class BoardRecognizer {
       out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch);
     }
     this.lastStats = { pts, cell, radius };
-    if (wantPatch && this.templates) {
+    if (wantPatch && this.templates && this.enableLowConfRefine) {
       this.refineLowConfidence(out, pixels, w, h, pts, cell, radius);
     }
     return out;
@@ -1265,8 +1272,10 @@ class BoardRecognizer {
     if (!vw || !vr || !this.templates) return { key: 'E', score: 0, warmRatio };
 
     let bestKey = 'E', best = -2;
+    const all = [];
     for (const key in this.templates) {
       const arr = this.templates[key];
+      let typeBest = -9;
       for (let t = 0; t < arr.length; t++) {
         const tpl = arr[t];
         let dotW = 0, dotR = 0, dotI = 0;
@@ -1281,10 +1290,14 @@ class BoardRecognizer {
         // 真正的車 反而只有 0.94，于是红俥被认成红傌（实测两格）。
         // 笔画掩码直接比字形，車 和 馬 立刻分开。
         const score = dotW + dotR * 1.8 + dotI * (tpl.i ? 2.6 : 0);
+        if (score > typeBest) typeBest = score;
         if (score > best) { best = score; bestKey = key; }
       }
+      all.push({ key: key, score: typeBest });
     }
-    return { key: bestKey, score: best, warmRatio };
+    // 候选项按分数降序，最多留 4 个，供「棋子数量上限」修复挑选
+    all.sort((a, b) => b.score - a.score);
+    return { key: bestKey, score: best, warmRatio, alts: all.slice(0, 4) };
   }
 
   /**
@@ -1301,6 +1314,7 @@ class BoardRecognizer {
     const grid = new Int8Array(90);
     const codes = new Int8Array(90);
     const conf = new Float32Array(90);
+    const rankedCodes = new Array(90);
     let tplFail = 0;
 
     for (let sq = 0; sq < 90; sq++) {
@@ -1364,17 +1378,89 @@ class BoardRecognizer {
       }
 
       const codeIsRed = (code < 8);
+      let finalCode;
       if (codeIsRed === inkRed) {
-        grid[sq] = inkColor;
-        codes[sq] = code;
+        finalCode = code;
       } else {
         // 颜色冲突 → 信墨迹，兵种取对应阵营的同一兵种
         const t = codeIsRed ? code : code - 7;
-        grid[sq] = inkColor;
-        codes[sq] = inkRed ? t : (t + 7);
+        finalCode = inkRed ? t : (t + 7);
+      }
+      grid[sq] = inkColor;
+      codes[sq] = finalCode;
+
+      // 记录候选兵种（按分数排序），供后面的「数量上限」修复用
+      const alts = r.alts || [];
+      const ranked = [];
+      for (let ai = 0; ai < alts.length; ai++) {
+        const k = (typeof alts[ai].key === 'number') ? alts[ai].key : parseInt(alts[ai].key, 10);
+        if (!k) continue;
+        const kRed = (k < 8);
+        const t = kRed ? k : k - 7;
+        const c = inkRed ? t : (t + 7);
+        if (ranked.indexOf(c) < 0) ranked.push(c);
+      }
+      if (ranked.indexOf(finalCode) < 0) ranked.unshift(finalCode);
+      rankedCodes[sq] = ranked;
+    }
+
+    // ---- 棋子数量上限修复 ----
+    // 象棋每种棋子的数量是固定的，超出上限就一定是认错了：
+    //   將帥1  仕2  象2  馬2  車2  炮2  兵5
+    // 实测最有价值的一条：红方本来只有两个馬，某一格把带高亮圈的红俥
+    // 认成紅傌，就会出现「三个馬」，改成車之后局面立刻合法。
+    const LIMIT = [0, 1, 2, 2, 2, 2, 2, 5];
+    const cnt = [new Array(8).fill(0), new Array(8).fill(0)];
+    for (let sq = 0; sq < 90; sq++) {
+      const v = codes[sq];
+      if (!v) continue;
+      if (v <= 7) cnt[0][v]++; else cnt[1][v - 7]++;
+    }
+    // 先修「分数差距最小」的格子（最可能认错的那个）
+    const order = [];
+    for (let sq = 0; sq < 90; sq++) {
+      const v = codes[sq];
+      if (!v) continue;
+      const alts = (stats[sq] && stats[sq].alts) || null;
+      const ranked = rankedCodes[sq] || [];
+      let margin = 99;
+      if (ranked.length >= 2) {
+        // 用 conf 里存的分数差做近似：候选中排第二的那个已经不在 codes 里，
+        // 这里用 conf 与「最佳替代」的差值估计。简化为 conf 越小越先修。
+        margin = conf[sq];
+      }
+      const side = v <= 7 ? 0 : 1;
+      const t = v <= 7 ? v : v - 7;
+      if (cnt[side][t] > LIMIT[t]) order.push({ sq: sq, key: margin });
+    }
+    order.sort((a, b) => a.key - b.key);
+
+    let repaired = 0;
+    for (let oi = 0; oi < order.length; oi++) {
+      const sq = order[oi].sq;
+      const v = codes[sq];
+      if (!v) continue;
+      const side = v <= 7 ? 0 : 1;
+      const t = v <= 7 ? v : v - 7;
+      if (cnt[side][t] <= LIMIT[t]) continue;
+      const ranked = rankedCodes[sq] || [];
+      for (let ri = 0; ri < ranked.length; ri++) {
+        const alt = ranked[ri];
+        if (!alt || alt === v) continue;
+        const as = alt <= 7 ? 0 : 1;
+        const at = alt <= 7 ? alt : alt - 7;
+        if (as !== side) continue;           // 红黑不改，颜色比兵种更可靠
+        if (cnt[side][at] >= LIMIT[at]) continue;
+        cnt[side][t]--;
+        cnt[side][at]++;
+        codes[sq] = alt;
+        grid[sq] = alt <= 7 ? RED_PC : BLK_PC;
+        repaired++;
+        break;
       }
     }
-    return { grid, conf, codes, tplFail };
+
+    return { grid, conf, codes, tplFail, repaired };
   }
 
   /**
