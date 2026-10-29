@@ -28,9 +28,9 @@ struct JJCheatApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onAppear {
-                    FrameServer.shared.restart()
-                }
+            // 这里不要再调 restart()：它会 stop→等 0.4s→start，
+            // 每次界面刷新都把正在工作的帧流打断。
+            // 监听的启停统一交给 AppModel 和 FrameServer 自己管。
         }
     }
 }

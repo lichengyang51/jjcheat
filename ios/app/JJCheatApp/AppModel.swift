@@ -48,6 +48,7 @@ final class AppModel: ObservableObject {
     @Published var depth = 0
     @Published var fromSq = -1
     @Published var toSq = -1
+    @Published var sideText = "红方"
 
     // 流程状态
     @Published var calibrated = false
@@ -126,6 +127,7 @@ final class AppModel: ObservableObject {
         learned = false
         UserDefaults.standard.set(false, forKey: learnedKey)
         status = "标定完成，请让画面停在标准开局"
+        refreshHUD()
     }
 
     func forceRelearn() {
@@ -133,6 +135,7 @@ final class AppModel: ObservableObject {
         learned = false
         UserDefaults.standard.set(false, forKey: learnedKey)
         status = "请让画面停在标准开局，正在重新学习…"
+        refreshHUD()
     }
 
     /// 校准按钮点击前的自检。
@@ -183,7 +186,11 @@ final class AppModel: ObservableObject {
             }
         }
 
-        guard calibrated else { return }
+        guard calibrated else {
+            // 还没校准也要让浮窗显示状态，但别每帧都重绘
+            if receivedFrames % 15 == 0 { refreshHUD() }
+            return
+        }
         guard !busy else { return }
         busy = true
 
@@ -196,6 +203,7 @@ final class AppModel: ObservableObject {
                 learned = true
                 UserDefaults.standard.set(true, forKey: learnedKey)
                 status = "棋盘学习完成，点「③ 打开画中画」"
+                refreshHUD()
             }
             busy = false
             return
@@ -220,6 +228,7 @@ final class AppModel: ObservableObject {
     private func consume(_ res: [String: Any], cost: Int) {
         if JJEngine.bool(res, "detectFail") {
             status = "识别偏差 \(JJEngine.int(res, "detectDiff")) 格，建议重新标定"
+            refreshHUD()
             return
         }
         fen = JJEngine.str(res, "fen", fen)
@@ -229,25 +238,52 @@ final class AppModel: ObservableObject {
         depth = JJEngine.int(res, "depth")
         fromSq = JJEngine.int(res, "from", -1)
         toSq = JJEngine.int(res, "to", -1)
+        sideText = JJEngine.str(res, "sideToMove") == "red" ? "红方" : "黑方"
 
-        let side = JJEngine.str(res, "sideToMove") == "red" ? "红方" : "黑方"
-        detail = "\(side)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
+        detail = "\(sideText)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
 
         if JJEngine.bool(res, "moveDetected") {
-            status = "对方走了 \(JJEngine.str(res, "moveChinese", JJEngine.str(res, "move")))"
+            let mv = JJEngine.str(res, "moveChinese", JJEngine.str(res, "move"))
+            status = "对方走了 \(mv)"
         }
 
-        if pipActive {
-            PiPController.shared.update(fen: fen, moveText: moveText, scoreText: scoreText,
-                                        winrate: winrate, depth: depth, from: fromSq, to: toSq)
-        }
+        refreshHUD()
+    }
+
+    // MARK: - 画中画内容
+
+    /// 浮窗主文字：没校准时显示状态，有招时显示着法
+    private var hudMainText: String {
+        if !calibrated { return "未校准" }
+        if !learned { return "等开局" }
+        if moveText.isEmpty { return "识别中…" }
+        return moveText
+    }
+
+    private var hudHint: String {
+        if !calibrated { return "回 App 点「点我校准」" }
+        if !learned { return "开一局新棋让它学棋盘" }
+        return ""
+    }
+
+    /// 把当前状态推到浮窗
+    func refreshHUD() {
+        guard PiPController.shared.isActive else { return }
+        PiPController.shared.update(PiPController.Content(
+            moveText: hudMainText,
+            scoreText: scoreText,
+            winrate: winrate,
+            depth: depth,
+            sideText: sideText,
+            hintText: hudHint,
+            hasMove: calibrated && learned && !moveText.isEmpty
+        ))
     }
 
     // MARK: - 画中画
 
     func startPiP(sourceView: UIView) {
-        PiPController.shared.update(fen: fen, moveText: moveText, scoreText: scoreText,
-                                    winrate: winrate, depth: depth, from: fromSq, to: toSq)
+        refreshHUD()
         PiPController.shared.onStateChange = { [weak self] active, err in
             guard let self else { return }
             self.pipActive = active

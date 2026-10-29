@@ -2,8 +2,8 @@
 //  PiPController.swift
 //  JJCheatApp —— 画中画浮窗
 //
-//  用 AVPictureInPictureVideoCallViewController 承载自定义棋盘视图。
-//  浮窗悬浮在 JJ象棋 之上，可拖动、可双指缩放。
+//  用 AVPictureInPictureVideoCallViewController 承载一个极简文字视图。
+//  浮窗体积小，飘在 JJ象棋 上方，只告诉你「走哪一步」和「局势如何」。
 //
 
 import UIKit
@@ -17,18 +17,18 @@ final class PiPController: NSObject {
     private var pip: AVPictureInPictureController?
     private var host: AVPictureInPictureVideoCallViewController?
     private var container: UIViewController?
-    let boardView = BoardRenderView(frame: CGRect(x: 0, y: 0, width: 320, height: 360))
 
-    /// 浮窗尺寸（point）。9:10 棋盘 + 顶部信息条
-    var preferredSize = CGSize(width: 300, height: 372)
+    /// 极简文字浮窗
+    let hudView = CompactHUDView(frame: CGRect(x: 0, y: 0, width: 300, height: 118))
+
+    /// 浮窗尺寸（point）。宽扁形，占屏幕一小块
+    var preferredSize = CGSize(width: 300, height: 118)
 
     private(set) var isActive = false
-
     var onStateChange: ((Bool, String?) -> Void)?
 
     // MARK: - 启动
 
-    /// @param sourceView 必须是在窗口层级里的可见 view（用作 PiP 的锚点）
     func start(sourceView: UIView) {
         guard AVPictureInPictureController.isPictureInPictureSupported() else {
             onStateChange?(false, "这台设备不支持画中画")
@@ -40,13 +40,13 @@ final class PiPController: NSObject {
 
         let vc = AVPictureInPictureVideoCallViewController()
         vc.preferredContentSize = preferredSize
-        vc.view.backgroundColor = UIColor(red: 0.93, green: 0.84, blue: 0.66, alpha: 1)
+        vc.view.backgroundColor = UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 1)
 
         let child = UIViewController()
         child.view.backgroundColor = .clear
-        boardView.frame = CGRect(origin: .zero, size: preferredSize)
-        boardView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        child.view.addSubview(boardView)
+        hudView.frame = CGRect(origin: .zero, size: preferredSize)
+        hudView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        child.view.addSubview(hudView)
 
         vc.addChild(child)
         child.view.frame = CGRect(origin: .zero, size: preferredSize)
@@ -82,21 +82,29 @@ final class PiPController: NSObject {
 
     // MARK: - 更新内容
 
-    func update(fen: String, moveText: String, scoreText: String,
-                winrate: Double, depth: Int, from: Int, to: Int) {
-        boardView.fen = fen
-        boardView.moveText = moveText
-        boardView.scoreText = scoreText
-        boardView.winrate = winrate
-        boardView.depth = depth
-        boardView.suggestFrom = from
-        boardView.suggestTo = to
+    struct Content {
+        var moveText: String
+        var scoreText: String
+        var winrate: Double
+        var depth: Int
+        var sideText: String
+        var hintText: String
+        var hasMove: Bool
+    }
+
+    func update(_ c: Content) {
+        hudView.moveText = c.moveText
+        hudView.scoreText = c.scoreText
+        hudView.winrate = c.winrate
+        hudView.depth = c.depth
+        hudView.sideText = c.sideText
+        hudView.hintText = c.hintText
+        hudView.hasMove = c.hasMove
     }
 
     // MARK: - 音频会话
 
-    /// 画中画要持续存在，必须有活跃的 audio session；
-    /// 配置成 mixWithOthers + 播放静音，保证退到后台仍在跑。
+    /// 画中画要持续存在，需要活跃的 audio session
     private func configureAudioSession() {
         let s = AVAudioSession.sharedInstance()
         do {
