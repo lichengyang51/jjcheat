@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T15:14:31.429Z
+ *  生成时间: 2026-10-29T15:18:18.968Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -3730,6 +3730,40 @@ function codesUsable(codes) {
   return n >= 4;
 }
 
+/**
+ * 严格合法性校验：这一帧识别出来的盘面「有没有可能是一盘真棋」。
+ *
+ * 为什么要这道闸：真机抓屏和离线截图不完全一致，偶尔会出几帧垃圾识别。
+ * 垃圾盘面一旦被显示出去，用户看到的就是「满盘车」「红帅变黑将」这种乱象，
+ * 而真正该做的是：宁可继续显示上一帧合法盘面，也不要把垃圾推给用户。
+ *
+ * 判据（象棋规则里不可能出现的组合）：
+ *   每方最多 1 个将帅、2 仕、2 相、2 马、2 车、2 炮、5 兵
+ *   双方棋子总数都不能超过 16，且不能少到 5 个以下（那是识别崩了）
+ *   必须有一方有将帅（至少红黑各 1 个里的一个，允许另一侧被遮挡漏读）
+ */
+function codesLegal(codes) {
+  var LIM = [0, 1, 2, 2, 2, 2, 2, 5];   // 将 仕 相 马 车 炮 兵
+  var cnt = [new Array(8).fill(0), new Array(8).fill(0)];
+  var redN = 0, blkN = 0;
+  for (var i = 0; i < 90; i++) {
+    var v = codes[i];
+    if (!v) continue;
+    if (v >= 1 && v <= 7) { redN++; cnt[0][v]++; }
+    else if (v >= 8 && v <= 14) { blkN++; cnt[1][v - 7]++; }
+  }
+  if (redN > 16 || blkN > 16) return false;
+  if (redN + blkN < 5) return false;
+  for (var s = 0; s < 2; s++) {
+    for (var t = 1; t <= 7; t++) {
+      if (cnt[s][t] > LIM[t]) return false;
+    }
+  }
+  // 至少要有将帅中的一方在场，否则多半是整盘没读到
+  if (cnt[0][1] === 0 && cnt[1][1] === 0) return false;
+  return true;
+}
+
 /* ============================================================
  *  全局会话状态（单例）
  * ============================================================ */
@@ -4158,7 +4192,27 @@ var JJEngine = {
     //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
     //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
     var firstLatch = !session.lastBoardFen;
-    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
+    // ★ 合法性闸门
+    //   真机抓屏偶尔会出几帧垃圾识别（满盘车、红帅变黑将之类）。
+    //   与其把垃圾显示出去，不如继续显示上一帧合法盘面 ——
+    //   你看到的永远是「一盘真棋」，不会是乱码盘。
+    var legalNow = cls.codes && codesLegal(session.flipped ? flipCodes(cls.codes) : cls.codes);
+    if (!legalNow) {
+      session.legalStreak = 0;
+      session.illegalStreak = (session.illegalStreak || 0) + 1;
+      // 连续 40 帧都不合法 → 清掉旧局面，让下一帧合法识别重新落地
+      if (session.illegalStreak > 40) {
+        session.lastBoardFen = '';
+        session.lastRawFen = '';
+        session.lastResult = null;
+        session.illegalStreak = 0;
+      }
+    } else {
+      session.illegalStreak = 0;
+      session.legalStreak = (session.legalStreak || 0) + 1;
+    }
+
+    if (legalNow && (firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       // 两套 FEN，别再混用：
       //   rawFen = 屏幕原样（给浮窗显示，必须跟你眼睛看到的一模一样）
       //   engFen = 引擎内部坐标（红永远在下，给算棋用）
