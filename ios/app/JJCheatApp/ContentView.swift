@@ -211,13 +211,14 @@ struct ContentView: View {
             row("后台接收", model.serverRunning ? "运行中 127.0.0.1:9527" : "已停止")
             row("录屏扩展", model.connected ? "已接入" : "未接入")
             row("启动心跳", model.startHB > 0 ? "\(model.startHB) 个  (扩展已启动)"
-                                            : "0  (扩展没跑起来)")
+                                            : "0 个")
             row("定时心跳", model.timerHB > 0 ? "\(model.timerHB) 个  (扩展进程活着)"
-                                            : "0  (扩展已死)")
+                                            : "0 个")
             row("画面帧", "\(model.receivedFrames)" + (model.receivedFrames > 0 ? "  (系统在喂画面)"
                                                                     : "  (系统没喂画面)"))
             row("画面尺寸", model.frameSize == .zero ? "—" :
                 "\(Int(model.frameSize.width)) × \(Int(model.frameSize.height))")
+            row("历史帧", "\(model.frameHistory.count) 张  (校准可回翻)")
             row("扩展 ID", model.extID)
             if let t = model.lastFrameAt {
                 row("最后收帧", t.formatted(date: .omitted, time: .standard))

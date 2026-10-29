@@ -81,13 +81,17 @@ final class AppModel: ObservableObject {
 
         loadCalibration()
 
-        // 回前台 → 彻底重建监听（旧 socket 可能已死但标志位还说在跑）
+        // 回到前台：只在监听真的挂了时才重建。
+        // 原来无条件 restart() 会 stop→等 0.4s→start，每次都把帧流打断，
+        // 而且 serverRunning 在这窗口里是 false，会让校准按钮误报「通道没起来」。
         let o1 = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
-                FrameServer.shared.restart()
-                self.serverRunning = true
+                if !FrameServer.shared.isRunning {
+                    FrameServer.shared.start()
+                }
+                self.serverRunning = FrameServer.shared.isRunning
             }
         observers = [o1]
 
@@ -131,15 +135,15 @@ final class AppModel: ObservableObject {
         status = "请让画面停在标准开局，正在重新学习…"
     }
 
-    /// 校准按钮点击前的自检，返回 nil 表示可以进校准
+    /// 校准按钮点击前的自检。
+    /// 注意：只看「有没有收到过帧」，不看 serverRunning ——
+    /// serverRunning 在监听重建的短暂窗口里会是 false，拿它做门槛会误报。
     func calibrationBlocker() -> String? {
-        if !serverRunning {
-            return "后台接收通道没起来。回主界面等一下，或重开录屏。"
-        }
         if receivedFrames == 0 {
+            if !FrameServer.shared.isRunning { FrameServer.shared.start() }
             return "还没收到任何录屏画面。请确认：\n① 控制中心/灵动岛有红点（录屏在跑）\n② 录屏里选的是「JJCheat 录屏」\n③ 切到 JJ象棋再切回来，等 2 秒"
         }
-        if frameHistory.isEmpty && lastImage == nil {
+        if lastImage == nil && frameHistory.isEmpty {
             return "收到帧了但画面解析失败，重开录屏试试。"
         }
         return nil

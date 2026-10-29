@@ -35,8 +35,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private let stride: UInt64 = 10
     /// 心跳间隔
     private let heartbeatEvery: UInt64 = 5
-    /// 降采样倍数
-    private let downscale = 3
+    /// 降采样倍数：ReplayKit 给的是 882×1917，降 2 倍得 441×958，
+    /// 棋盘每格约 49×95 像素，识别余量足够；降 3 倍只有 294×639 偏糊
+    private let downscale = 2
 
     private var heartbeatTimer: DispatchSourceTimer?
     private let heartbeatQueue = DispatchQueue(label: "jjcheat.broadcast.heartbeat")
