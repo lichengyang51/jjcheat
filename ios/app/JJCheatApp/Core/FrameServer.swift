@@ -36,6 +36,8 @@ final class FrameServer {
     private(set) var isRunning = false
     private(set) var frameCount: UInt64 = 0
     private(set) var heartbeatCount: UInt64 = 0
+    private(set) var startHeartbeats: UInt64 = 0     // broadcastStarted 发的
+    private(set) var timerHeartbeats: UInt64 = 0     // 每秒定时发的
     private(set) var badPacketCount: UInt64 = 0
     private(set) var lastFrameSize: CGSize = .zero
 
@@ -151,6 +153,11 @@ final class FrameServer {
             // 心跳包：只证明扩展活着，不带画面
             if h.isHeartbeat {
                 heartbeatCount += 1
+                switch h.heartbeatKind {
+                case 1: startHeartbeats += 1
+                case 2: timerHeartbeats += 1
+                default: break
+                }
                 DispatchQueue.main.async { [weak self] in
                     self?.onHeartbeat?()
                 }

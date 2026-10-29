@@ -37,7 +37,25 @@ public struct JJFrameHeader {
         JJFrameHeader(width: 0, height: 0, bytesPerRow: 0, payloadLen: 0)
     }
 
+    /// 启动心跳：broadcastStarted 时立刻发，w=h=1 作为标记
+    public static func startHeartbeat() -> JJFrameHeader {
+        JJFrameHeader(width: 1, height: 1, bytesPerRow: 0, payloadLen: 0)
+    }
+
+    /// 定时心跳：每秒一个，w=h=2 作为标记
+    public static func timerHeartbeat() -> JJFrameHeader {
+        JJFrameHeader(width: 2, height: 2, bytesPerRow: 0, payloadLen: 0)
+    }
+
     public var isHeartbeat: Bool { payloadLen == 0 }
+
+    /// 心跳子类型：0 普通 1 启动 2 定时
+    public var heartbeatKind: Int {
+        guard isHeartbeat else { return -1 }
+        if width == 1 && height == 1 { return 1 }
+        if width == 2 && height == 2 { return 2 }
+        return 0
+    }
 
     public func encoded() -> Data {
         var d = Data(capacity: JJProto.headerSize)

@@ -207,11 +207,14 @@ struct ContentView: View {
             Text("通道诊断").font(.caption.bold()).foregroundColor(.secondary)
             row("后台接收", model.serverRunning ? "运行中 127.0.0.1:9527" : "已停止")
             row("录屏扩展", model.connected ? "已接入" : "未接入")
-            row("心跳包", "\(model.heartbeats)" + (model.heartbeats > 0 ? "  (扩展活着)" : "  (扩展没发数据)"))
-            row("收到帧数", "\(model.receivedFrames)")
+            row("启动心跳", model.startHB > 0 ? "\(model.startHB) 个  (扩展已启动)"
+                                            : "0  (扩展没跑起来)")
+            row("定时心跳", model.timerHB > 0 ? "\(model.timerHB) 个  (扩展进程活着)"
+                                            : "0  (扩展已死)")
+            row("画面帧", "\(model.receivedFrames)" + (model.receivedFrames > 0 ? "  (系统在喂画面)"
+                                                                    : "  (系统没喂画面)"))
             row("画面尺寸", model.frameSize == .zero ? "—" :
                 "\(Int(model.frameSize.width)) × \(Int(model.frameSize.height))")
-            row("音频保活", AudioKeepAlive.shared.isRunning ? "运行中" : "未运行")
             row("扩展 ID", model.extID)
             if let t = model.lastFrameAt {
                 row("最后收帧", t.formatted(date: .omitted, time: .standard))

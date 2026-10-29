@@ -43,6 +43,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
     ])
     private let colorSpace = CGColorSpaceCreateDeviceRGB()
 
+    /// 独立心跳定时器：完全不依赖 processSampleBuffer，
+    /// 用来区分「扩展没跑起来」和「跑起来了但系统不喂画面」
+    private var heartbeatTimer: DispatchSourceTimer?
+    private let heartbeatQueue = DispatchQueue(label: "jjcheat.broadcast.heartbeat")
+
     // MARK: - 生命周期
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
@@ -51,18 +56,39 @@ final class SampleHandler: RPBroadcastSampleHandler {
         sampleBufferCount = 0
         convertedCount = 0
         failedCount = 0
-        NSLog("[JJCheat/bc] broadcastStarted")
+
+        // 立刻发一个「启动心跳」
+        client?.send(JJFrameHeader.startHeartbeat().encoded())
+
+        // 每秒一个定时心跳，证明扩展进程活着
+        let t = DispatchSource.makeTimerSource(queue: heartbeatQueue)
+        t.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        t.setEventHandler { [weak self] in
+            self?.client?.send(JJFrameHeader.timerHeartbeat().encoded())
+        }
+        t.resume()
+        heartbeatTimer = t
+
+        NSLog("[JJCheat/bc] broadcastStarted ok")
+    }
+
+    private func stopTimer() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
     }
 
     override func broadcastFinished() {
         NSLog("[JJCheat/bc] broadcastFinished  sb=%llu conv=%llu fail=%llu",
               sampleBufferCount, convertedCount, failedCount)
+        stopTimer()
+        client?.send(JJFrameHeader.startHeartbeat().encoded())   // 结束前再补一个
         client?.close()
         client = nil
     }
 
     override func finishBroadcastWithError(_ error: Error) {
         NSLog("[JJCheat/bc] finishBroadcastWithError %@", "\(error)")
+        stopTimer()
         client?.close()
         client = nil
         super.finishBroadcastWithError(error)

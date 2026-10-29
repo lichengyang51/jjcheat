@@ -20,6 +20,8 @@ final class AppModel: ObservableObject {
     @Published var serverRunning = false
     @Published var receivedFrames: UInt64 = 0
     @Published var heartbeats: UInt64 = 0
+    @Published var startHB: UInt64 = 0
+    @Published var timerHB: UInt64 = 0
     @Published var badPackets: UInt64 = 0
     @Published var lastFrameAt: Date?
     @Published var lastImage: UIImage?
@@ -55,6 +57,8 @@ final class AppModel: ObservableObject {
         FrameServer.shared.onHeartbeat = { [weak self] in
             guard let self else { return }
             self.heartbeats = FrameServer.shared.heartbeatCount
+            self.startHB = FrameServer.shared.startHeartbeats
+            self.timerHB = FrameServer.shared.timerHeartbeats
             self.badPackets = FrameServer.shared.badPacketCount
         }
         FrameServer.shared.onStateChange = { [weak self] up in
@@ -65,25 +69,15 @@ final class AppModel: ObservableObject {
 
         loadCalibration()
 
-        // 保活：真的播放一段无声 WAV，配合 Info.plist 的 audio 后台模式
-        AudioKeepAlive.shared.start()
-
-        // 回到前台 → 重建监听 + 重启保活
+        // 回前台 → 彻底重建监听（旧 socket 可能已死但标志位还说在跑）
         let o1 = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
-                AudioKeepAlive.shared.start()
                 FrameServer.shared.restart()
                 self.serverRunning = true
             }
-        // 进后台 → 确保保活在跑
-        let o2 = NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil, queue: .main) { _ in
-                AudioKeepAlive.shared.start()
-            }
-        observers = [o1, o2]
+        observers = [o1]
 
         FrameServer.shared.start()
         serverRunning = FrameServer.shared.isRunning
@@ -199,7 +193,7 @@ final class AppModel: ObservableObject {
         toSq = JJEngine.int(res, "to", -1)
 
         let side = JJEngine.str(res, "sideToMove") == "red" ? "红方" : "黑方"
-        detail = "\(side)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames) · 保活 \(AudioKeepAlive.shared.isRunning ? "开" : "关")"
+        detail = "\(side)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
 
         if JJEngine.bool(res, "moveDetected") {
             status = "对方走了 \(JJEngine.str(res, "moveChinese", JJEngine.str(res, "move")))"
