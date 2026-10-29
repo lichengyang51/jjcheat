@@ -71,8 +71,30 @@ class BoardRecognizer {
     this.corners = cfg.corners ? cfg.corners.map(p => [p[0], p[1]]) : null;
     this.cellRadiusRatio = cfg.cellRadiusRatio || 0.40;
     this.bgModel = cfg.bgModel || null;
-    this.templates = cfg.templates || null; // [{key, w, h, gray:Uint8Array}]
+    this.templates = cfg.templates || null;
     this.lastStats = null;
+
+    // 径向权重：中心权重高、边缘权重低。
+    // 空格的 patch 边缘是棋盘网格线（深色直线），棋子的边缘是圆形描边，
+    // 两者在灰度上很像，全图等权比对会被边缘带偏。
+    // 加权后由中心区域主导 —— 棋子中心是圆盘+字，空格中心是干净棋盘，差异最明显。
+    const PW = 16;
+    this.patchWeights = (() => {
+      const w = new Float32Array(PW * PW);
+      let sum = 0;
+      const half = (PW - 1) / 2;
+      for (let py = 0; py < PW; py++) {
+        for (let px = 0; px < PW; px++) {
+          const dx = (px - half) / half;
+          const dy = (py - half) / half;
+          const v = Math.exp(-(dx * dx + dy * dy) * 1.2);
+          w[py * PW + px] = v;
+          sum += v;
+        }
+      }
+      for (let i = 0; i < w.length; i++) w[i] /= sum;
+      return w;
+    })();
   }
 
   /** 计算 90 个交叉点的像素坐标；返回 Float32Array(180) */
@@ -108,46 +130,78 @@ class BoardRecognizer {
   }
 
   /**
-   * 采样一个交叉点周围的特征
-   * @returns {{meanL, redR, darkR, brightR, warmR, n, patch}}
+   * 采样一个交叉点周围的特征 + 模板图
+   *
+   * 【历史 bug】原来 patch 的填充复用了统计用的 step（radius/4 = 5 像素），
+   * 而 patch 每格只有 (2*radius/16 = 2.5) 像素宽，导致 256 个 patch 格
+   * 里一大半根本没被赋值，全是初始 0 —— 所有格子的模板长得一样，
+   * NSC 匹配全部失效，最终把棋子全判成空（正好 30 格偏差）。
+   *
+   * 现在 patch 按 16×16 网格逐格采样，一个不漏；
+   * 统计特征也从同一批采样点累计，口径一致。
    */
   sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
     let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0;
-    const step = Math.max(1, Math.floor(radius / 4));
-    const r2 = radius * radius;
-    const inner = (radius * 0.18) * (radius * 0.18);
-
     const PW = 16;
-    const patch = wantPatch ? new Uint8Array(PW * PW) : null;
-    const pw = wantPatch ? (radius * 2) / PW : 0;
+    let patchW = null, patchR = null;
 
-    for (let dy = -radius; dy <= radius; dy += step) {
-      for (let dx = -radius; dx <= radius; dx += step) {
-        const d2 = dx * dx + dy * dy;
-        if (d2 > r2) continue;
-        const x = Math.round(cx + dx);
-        const y = Math.round(cy + dy);
-        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
-        const i = (y * w + x) * 4;
-        const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
-        const L = 0.299 * R + 0.587 * G + 0.114 * B;
-        sumL += L; n++;
-        const rb = R - B;
-        if (R > 85 && (R - G) > 45 && rb > 45) red++;
-        if (L < 72) dark++;
-        if (L > 178) bright++;
-        // 暖色度：棋子盘面是棕黄（R 明显高于 B），棋盘是灰绿（R≈B 或偏低）
-        // 这是比绝对亮度可靠得多的判据
-        if (rb > 26 && R > 85) warm++;
+    if (wantPatch) {
+      patchW = new Uint8Array(PW * PW);
+      patchR = new Uint8Array(PW * PW);
+      const span = radius * 2;
+      const stepPx = span / PW;
+      for (let py = 0; py < PW; py++) {
+        for (let px = 0; px < PW; px++) {
+          const sx = Math.round(cx - radius + (px + 0.5) * stepPx);
+          const sy = Math.round(cy - radius + (py + 0.5) * stepPx);
+          if (sx < 1 || sy < 1 || sx >= w - 1 || sy >= h - 1) continue;
+          const i = (sy * w + sx) * 4;
+          const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          const L = 0.299 * R + 0.587 * G + 0.114 * B;
+          const rb = R - B;
+          const isWarm = (rb > 22 && R > 80);
+          const isRed = (R > 85 && (R - G) > 45 && rb > 45);
 
-        if (wantPatch) {
-          const px = Math.min(PW - 1, Math.max(0, Math.floor((dx + radius) / pw)));
-          const py = Math.min(PW - 1, Math.max(0, Math.floor((dy + radius) / pw)));
-          patch[py * PW + px] = L;
+          // 双通道 patch：
+          //   W 通道 = 暖色掩码 → 区分「有子 / 空」（棋子棕黄 vs 棋盘灰绿）
+          //   R 通道 = 红色掩码 → 区分「红子 / 黑子」（红字发红、黑字不发红）
+          // 单用灰度会丢掉颜色，单用暖色会丢掉红黑，必须两个都要。
+          const idx = py * PW + px;
+          patchW[idx] = isWarm ? 255 : 0;
+          patchR[idx] = isRed ? 255 : 0;
+
+          sumL += L; n++;
+          if (isRed) red++;
+          if (L < 72) dark++;
+          if (L > 178) bright++;
+          if (isWarm) warm++;
+        }
+      }
+    } else {
+      const step = Math.max(1, Math.floor(radius / 4));
+      const r2 = radius * radius;
+      for (let dy = -radius; dy <= radius; dy += step) {
+        for (let dx = -radius; dx <= radius; dx += step) {
+          if (dx * dx + dy * dy > r2) continue;
+          const x = Math.round(cx + dx);
+          const y = Math.round(cy + dy);
+          if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
+          const i = (y * w + x) * 4;
+          const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          const L = 0.299 * R + 0.587 * G + 0.114 * B;
+          sumL += L; n++;
+          const rb = R - B;
+          if (R > 85 && (R - G) > 45 && rb > 45) red++;
+          if (L < 72) dark++;
+          if (L > 178) bright++;
+          if (rb > 26 && R > 85) warm++;
         }
       }
     }
-    if (n === 0) return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, patch };
+
+    if (n === 0) {
+      return { meanL: 0, redR: 0, darkR: 0, brightR: 0, warmR: 0, n: 0, patchW, patchR };
+    }
     return {
       meanL: sumL / n,
       redR: red / n,
@@ -155,7 +209,8 @@ class BoardRecognizer {
       brightR: bright / n,
       warmR: warm / n,
       n,
-      patch
+      patchW,
+      patchR
     };
   }
 
@@ -249,49 +304,51 @@ class BoardRecognizer {
   }
 
   /**
-   * 归一化 patch：减去均值再除以标准差
-   * 这样比对的只是「图案形状」，跟整体亮度、色调、高光完全无关
+   * 加权归一化 patch：减加权均值、除加权标准差
+   * 比对的只是「中心区域的图案形状」，跟亮度、色调、边缘网格线无关
    */
   normalizePatch(patch) {
     const n = patch.length;
     if (!n) return null;
-    let sum = 0;
-    for (let i = 0; i < n; i++) sum += patch[i];
-    const mean = sum / n;
+    const w = (this.patchWeights && this.patchWeights.length === n) ? this.patchWeights : null;
+
+    let sum = 0, sumW = 0;
+    for (let i = 0; i < n; i++) {
+      const wi = w ? w[i] : 1;
+      sum += wi * patch[i];
+      sumW += wi;
+    }
+    const mean = sum / (sumW || 1);
+
     let varSum = 0;
     for (let i = 0; i < n; i++) {
+      const wi = w ? w[i] : 1;
       const d = patch[i] - mean;
-      varSum += d * d;
+      varSum += wi * d * d;
     }
-    const std = Math.sqrt(varSum / n) || 1;
+    const std = Math.sqrt(varSum / (sumW || 1)) || 1;
+
     const out = new Float32Array(n);
     for (let i = 0; i < n; i++) out[i] = (patch[i] - mean) / std;
     return out;
   }
 
   /**
-   * 从开局画面采集模板。
-   *
-   * 关键优势：中国象棋开局 32 个棋子的位置和身份是固定的死数，
-   * 所以这里采到的每一个模板，它的「兵种 + 阵营」标签都是确定的。
-   * 后面每帧拿格子去和这些模板比对，就不依赖任何颜色阈值了。
-   *
-   * @param {Array} stats sampleAll(wantPatch=true) 的结果
-   * @param {Array} boardPieceAt 90 个格子的棋子编码（0 = 空）
+   * 从开局画面采集模板（双通道）
    */
   learnTemplates(stats, boardPieceAt) {
-    const buckets = {};   // key -> [归一化向量]
+    const buckets = {};   // key -> [{w:归一化暖色, r:归一化红色}]
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
-      if (!s || !s.patch) continue;
+      if (!s || !s.patchW) continue;
       const key = boardPieceAt[sq] || 'E';
-      const v = this.normalizePatch(s.patch);
-      if (!v) continue;
+      const vw = this.normalizePatch(s.patchW);
+      const vr = this.normalizePatch(s.patchR);
+      if (!vw || !vr) continue;
       if (!buckets[key]) buckets[key] = [];
-      buckets[key].push(v);
+      buckets[key].push({ w: vw, r: vr });
     }
     this.templates = buckets;
-    // 统计一下采到多少
     let total = 0;
     for (const k in buckets) total += buckets[k].length;
     this.templateCount = total;
@@ -299,45 +356,66 @@ class BoardRecognizer {
   }
 
   /**
-   * 用模板匹配判定一格是什么
-   * @returns {{key:number|string, score:number}}
+   * 双通道加权 NCC 匹配
+   *
+   * 【必须先做暖色预筛】空格的 patchW 全是 0，归一化后得到全 0 向量，
+   * 跟任何模板的点积都是 0 —— 于是所有空格都会被投给第一个碰上的红子模板
+   * （曾经导致 58 格偏差，正好等于空格总数）。
+   * 所以先用暖色占比把「明显是空格」的格子直接判掉，只让候选格进模板比对。
    */
-  matchCell(patch) {
-    const v = this.normalizePatch(patch);
-    if (!v || !this.templates) return { key: 'E', score: -2 };
-    const n = v.length;
+  matchCell(stats) {
+    const PW = stats.patchW.length;
+    let warmCount = 0, redCount = 0;
+    for (let i = 0; i < PW; i++) {
+      if (stats.patchW[i] > 0) warmCount++;
+      if (stats.patchR[i] > 0) redCount++;
+    }
+    const warmRatio = warmCount / PW;
+
+    // 暖色像素占比太低 → 一定是空棋盘，直接判空
+    if (warmRatio < 0.18) return { key: 'E', score: warmRatio, warmRatio };
+
+    const vw = this.normalizePatch(stats.patchW);
+    const vr = this.normalizePatch(stats.patchR);
+    if (!vw || !vr || !this.templates) return { key: 'E', score: 0, warmRatio };
+
+    const n = vw.length;
+    const wgt = (this.patchWeights && this.patchWeights.length === n) ? this.patchWeights : null;
+
     let bestKey = 'E', best = -2;
     for (const key in this.templates) {
       const arr = this.templates[key];
-      // 同一兵种可能有多个样本（5 个兵），取最高的那个
       for (let t = 0; t < arr.length; t++) {
-        const tv = arr[t];
-        let dot = 0;
-        for (let i = 0; i < n; i++) dot += v[i] * tv[i];
-        const ncc = dot / n;      // 归一化互相关，范围约 -1..1
-        if (ncc > best) { best = ncc; bestKey = key; }
+        const tpl = arr[t];
+        let dotW = 0, dotR = 0;
+        for (let i = 0; i < n; i++) {
+          const wi = wgt ? wgt[i] : 1;
+          dotW += wi * vw[i] * tpl.w[i];
+          dotR += wi * vr[i] * tpl.r[i];
+        }
+        const score = dotW + dotR * 1.8;
+        if (score > best) { best = score; bestKey = key; }
       }
     }
-    return { key: bestKey, score: best };
+    return { key: bestKey, score: best, warmRatio };
   }
 
   /**
    * 模板匹配版三分类
-   * @returns {{grid:Int8Array, conf:Float32Array}}
    */
   classifyByTemplate(stats) {
     const grid = new Int8Array(90);
     const conf = new Float32Array(90);
     for (let sq = 0; sq < 90; sq++) {
       const s = stats[sq];
-      if (!s || !s.patch) { grid[sq] = EMPTY; continue; }
-      const r = this.matchCell(s.patch);
+      if (!s || !s.patchW) { grid[sq] = EMPTY; continue; }
+      const r = this.matchCell(s);
       conf[sq] = r.score;
       if (r.key === 'E') {
         grid[sq] = EMPTY;
       } else {
         const code = (typeof r.key === 'number') ? r.key : parseInt(r.key, 10);
-        if (!code || code === 0) { grid[sq] = EMPTY; }
+        if (!code || code === 0) grid[sq] = EMPTY;
         else grid[sq] = (code < 8) ? RED_PC : BLK_PC;
       }
     }
