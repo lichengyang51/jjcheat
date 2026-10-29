@@ -237,31 +237,54 @@ var JJEngine = {
     if (out.moveDetected || !session.lastResult || session.lastFen !== session.tracker.fen) {
       var t0 = Date.now();
       var res = ENG.analyze(session.tracker.fen, { timeMs: opts.timeMs || 800 });
-      session.lastFen = session.tracker.fen;
-      session.lastResult = res;
-
       var pos = new POS.Position(session.tracker.fen);
       var mv = C.ucciToMv(res.bestmove);
-      out.suggest = res.bestmove;
-      out.suggestChinese = res.bestmove ? NOTE.mvToChinese(pos.board, mv, pos.side) : '';
-      out.from = res.bestmove ? C.mvFrom(mv) : -1;
-      out.to = res.bestmove ? C.mvTo(mv) : -1;
-      out.score = res.score;
-      out.scoreText = (res.score >= 0 ? '+' : '') + (res.score / 100).toFixed(2);
-      out.winrate = Math.round(res.winrate * 1000) / 10;
-      out.depth = res.depth;
-      out.pv = res.pv;
-      out.nodes = res.nodes;
+
+      // 完整缓存：中文着法、起止格、分值、胜率、深度、走子方
+      // 否则下一帧走缓存分支时，着法就丢了，浮窗会退回「识别中…」
+      session.lastFen = session.tracker.fen;
+      session.lastResult = {
+        bestmove: res.bestmove,
+        chinese: res.bestmove ? NOTE.mvToChinese(pos.board, mv, pos.side) : '',
+        from: res.bestmove ? C.mvFrom(mv) : -1,
+        to: res.bestmove ? C.mvTo(mv) : -1,
+        score: res.score,
+        scoreText: (res.score >= 0 ? '+' : '') + (res.score / 100).toFixed(2),
+        winrate: Math.round(res.winrate * 1000) / 10,
+        depth: res.depth,
+        pv: res.pv,
+        nodes: res.nodes,
+        mate: res.mate,
+        sideToMove: pos.side === C.RED ? 'red' : 'black'
+      };
+
+      var c = session.lastResult;
+      out.suggest = c.bestmove;
+      out.suggestChinese = c.chinese;
+      out.from = c.from;
+      out.to = c.to;
+      out.score = c.score;
+      out.scoreText = c.scoreText;
+      out.winrate = c.winrate;
+      out.depth = c.depth;
+      out.pv = c.pv;
+      out.nodes = c.nodes;
       out.elapsed = Date.now() - t0;
-      out.sideToMove = pos.side === C.RED ? 'red' : 'black';
-      out.mate = res.mate;
+      out.sideToMove = c.sideToMove;
+      out.mate = c.mate;
     } else {
-      out.suggest = session.lastResult ? session.lastResult.bestmove : '';
-      out.suggestChinese = '';
-      out.score = session.lastResult ? session.lastResult.score : 0;
-      out.scoreText = ((out.score >= 0 ? '+' : '') + (out.score / 100).toFixed(2));
-      out.winrate = session.lastResult ? Math.round(session.lastResult.winrate * 1000) / 10 : 50;
-      out.depth = session.lastResult ? session.lastResult.depth : 0;
+      // 局面没变：直接把上一次的完整结论端出来，不要清空
+      var c2 = session.lastResult || {};
+      out.suggest = c2.bestmove || '';
+      out.suggestChinese = c2.chinese || '';
+      out.from = (c2.from === undefined) ? -1 : c2.from;
+      out.to = (c2.to === undefined) ? -1 : c2.to;
+      out.score = c2.score || 0;
+      out.scoreText = c2.scoreText || '+0.00';
+      out.winrate = (c2.winrate === undefined) ? 50 : c2.winrate;
+      out.depth = c2.depth || 0;
+      out.sideToMove = c2.sideToMove || 'red';
+      out.mate = c2.mate || 0;
     }
 
     return out;

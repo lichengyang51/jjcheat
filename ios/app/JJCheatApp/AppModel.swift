@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     @Published var fromSq = -1
     @Published var toSq = -1
     @Published var sideText = "红方"
+    /// 对方刚走的那一步（中文），用于浮窗提示
+    @Published var opponentMove = ""
 
     // 流程状态
     @Published var calibrated = false
@@ -236,7 +238,7 @@ final class AppModel: ObservableObject {
             let res = JJEngine.shared.process(pixels: frame.data,
                                              width: frame.width,
                                              height: frame.height,
-                                             timeMs: 900)
+                                             timeMs: 1800)
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             self.busy = false
             guard let res else { return }
@@ -265,7 +267,8 @@ final class AppModel: ObservableObject {
 
         if JJEngine.bool(res, "moveDetected") {
             let mv = JJEngine.str(res, "moveChinese", JJEngine.str(res, "move"))
-            status = "对方走了 \(mv)"
+            opponentMove = mv
+            status = "对方走了 \(mv) · 建议 \(moveText)"
         }
 
         refreshHUD()
@@ -284,6 +287,7 @@ final class AppModel: ObservableObject {
     private var hudHint: String {
         if !calibrated { return "回 App 点「点我校准」" }
         if !learned { return "开一局新棋让它学棋盘" }
+        if !opponentMove.isEmpty { return "对方刚走 \(opponentMove)" }
         return ""
     }
 
