@@ -248,7 +248,10 @@ class BoardRecognizer {
    */
   constructor(cfg) {
     this.corners = cfg.corners ? cfg.corners.map(p => [p[0], p[1]]) : null;
-    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.40;
+    // 0.34：只采棋子中心区域。用 0.40 时会扫到棋子外缘，
+    // 而 JJ象棋 会用绿圈/红圈高亮「上一步走的子」，
+    // 红圈是纯红，会被误当成红子字，导致刚走过的棋子识别结果变化。
+    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.34;
     this.bgModel = cfg.bgModel || null;
     this.templates = cfg.templates || null;
     this.lastStats = null;

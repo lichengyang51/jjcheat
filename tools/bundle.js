@@ -409,19 +409,34 @@ var JJEngine = {
       session.codesStable = 0;
       session.lastCodesHash = codesHash;
     }
-    var codesSettled = (session.codesStable >= 1);
+    // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
+    // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
+    var codesSettled = (session.codesStable >= 2);
 
     if (codesSettled && cls.codes && validateCodes(cls.codes)) {
-      codesOk = true;
       var boardFen = codesToBoardFen(cls.codes);
-      if (boardFen !== session.lastBoardFen) {
-        // 局面变了 → 刚有人走完，现在轮到我这一方
+      // 局面更新限流：最多每 700ms 换一次。
+      // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
+      var nowMs = Date.now();
+      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
+
+      if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
+        session.lastBoardFenAt = nowMs;
+        session.lastFenUpdateTime = nowMs;
         session.sideToMoveNow = mySideDetected;
         out.moveDetected = true;
         session.lastResult = null;    // 强制重算
+      } else if (!session.lastBoardFen) {
+        // 第一次进来先落地，不占用限流
+        session.lastBoardFen = boardFen;
+        session.lastFenUpdateTime = nowMs;
+        session.sideToMoveNow = mySideDetected;
+        out.moveDetected = true;
+        session.lastResult = null;
       }
-      directFen = boardFen + ' ' +
+      codesOk = true;   // 校验通过就算识别有效（限流只是不换局面，不代表识别失败）
+      directFen = session.lastBoardFen + ' ' +
         (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.fen = directFen;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}

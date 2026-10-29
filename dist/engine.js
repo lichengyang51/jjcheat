@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T13:03:30.777Z
+ *  生成时间: 2026-10-29T13:05:16.420Z
  *  模块数: 7
  * ============================================================ */
 (function (global) {
@@ -1696,7 +1696,10 @@ class BoardRecognizer {
    */
   constructor(cfg) {
     this.corners = cfg.corners ? cfg.corners.map(p => [p[0], p[1]]) : null;
-    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.40;
+    // 0.34：只采棋子中心区域。用 0.40 时会扫到棋子外缘，
+    // 而 JJ象棋 会用绿圈/红圈高亮「上一步走的子」，
+    // 红圈是纯红，会被误当成红子字，导致刚走过的棋子识别结果变化。
+    this.cellRadiusRatio = cfg.cellRadiusRatio || 0.34;
     this.bgModel = cfg.bgModel || null;
     this.templates = cfg.templates || null;
     this.lastStats = null;
@@ -2696,19 +2699,34 @@ var JJEngine = {
       session.codesStable = 0;
       session.lastCodesHash = codesHash;
     }
-    var codesSettled = (session.codesStable >= 1);
+    // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
+    // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
+    var codesSettled = (session.codesStable >= 2);
 
     if (codesSettled && cls.codes && validateCodes(cls.codes)) {
-      codesOk = true;
       var boardFen = codesToBoardFen(cls.codes);
-      if (boardFen !== session.lastBoardFen) {
-        // 局面变了 → 刚有人走完，现在轮到我这一方
+      // 局面更新限流：最多每 700ms 换一次。
+      // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
+      var nowMs = Date.now();
+      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
+
+      if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
+        session.lastBoardFenAt = nowMs;
+        session.lastFenUpdateTime = nowMs;
         session.sideToMoveNow = mySideDetected;
         out.moveDetected = true;
         session.lastResult = null;    // 强制重算
+      } else if (!session.lastBoardFen) {
+        // 第一次进来先落地，不占用限流
+        session.lastBoardFen = boardFen;
+        session.lastFenUpdateTime = nowMs;
+        session.sideToMoveNow = mySideDetected;
+        out.moveDetected = true;
+        session.lastResult = null;
       }
-      directFen = boardFen + ' ' +
+      codesOk = true;   // 校验通过就算识别有效（限流只是不换局面，不代表识别失败）
+      directFen = session.lastBoardFen + ' ' +
         (session.sideToMoveNow === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.fen = directFen;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
