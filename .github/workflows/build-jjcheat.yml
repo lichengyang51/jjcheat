@@ -1,0 +1,68 @@
+name: build-jjcheat
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/tweak/**'
+      - 'dist/engine.js'
+      - 'src/**'
+      - '.github/workflows/build-jjcheat.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make git curl xz-utils libssl-dev libplist-dev \
+                                  libcrypt-dev libstdc++-12-dev zstd fakeroot
+
+      - name: 安装 ldid（签名工具）
+        run: |
+          curl -L -o /tmp/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
+          chmod +x /tmp/ldid
+          sudo mv /tmp/ldid /usr/local/bin/ldid
+          ldid -v || true
+
+      - name: 安装 Theos
+        run: |
+          export THEOS=$HOME/theos
+          git clone --recursive --depth 1 https://github.com/theos/theos.git $THEOS
+          mkdir -p $THEOS/sdks
+          curl -L -o /tmp/sdks.tar.gz https://github.com/theos/sdks/archive/refs/heads/master.tar.gz
+          tar -xzf /tmp/sdks.tar.gz -C /tmp
+          cp -r /tmp/sdks-master/iPhoneOS*.sdk $THEOS/sdks/ || true
+          ls $THEOS/sdks/
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: 打包引擎脚本
+        run: |
+          node tools/bundle.js
+          mkdir -p "ios/tweak/layout/Library/Application Support/JJCheat"
+          cp dist/engine.js "ios/tweak/layout/Library/Application Support/JJCheat/engine.js"
+
+      - name: 编译 deb
+        run: |
+          export PATH=$THEOS/bin:$PATH
+          cd ios/tweak
+          make package FINALPACKAGE=1 DEBUG=0
+          ls -la packages/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: JJCheat-deb
+          path: ios/tweak/packages/*.deb
+          if-no-files-found: error
+
+      - name: 上传 engine.js（单独一份，方便手动替换）
+        uses: actions/upload-artifact@v4
+        with:
+          name: JJCheat-engine-js
+          path: dist/engine.js
+          if-no-files-found: error

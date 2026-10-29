@@ -1,0 +1,77 @@
+name: build-ios-app
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/app/**'
+      - 'src/**'
+      - '.github/workflows/build-ios-app.yml'
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: 取代码
+        uses: actions/checkout@v4
+
+      - name: 查看 Xcode 版本
+        run: xcodebuild -version
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 打包引擎脚本
+        run: |
+          node tools/bundle.js
+          mkdir -p ios/app/JJCheatApp/Resources
+          cp dist/engine.js ios/app/JJCheatApp/Resources/engine.js
+          ls -la ios/app/JJCheatApp/Resources/
+
+      - name: 生成 Xcode 工程
+        run: |
+          cd ios/app
+          xcodegen generate
+          ls -la
+
+      - name: 编译（免签名 archive）
+        run: |
+          cd ios/app
+          xcodebuild \
+            -project JJCheat.xcodeproj \
+            -scheme JJCheatApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/JJCheat.xcarchive" \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            | xcpretty || xcodebuild \
+              -project JJCheat.xcodeproj \
+              -scheme JJCheatApp \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$RUNNER_TEMP/JJCheat.xcarchive" \
+              archive \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              ONLY_ACTIVE_ARCH=NO
+
+      - name: 打未签名 ipa
+        run: |
+          cd "$RUNNER_TEMP"
+          rm -rf Payload JJCheat-unsigned.ipa
+          mkdir -p Payload
+          cp -R "JJCheat.xcarchive/Products/Applications/JJCheatApp.app" Payload/
+          zip -qry JJCheat-unsigned.ipa Payload
+          unzip -l JJCheat-unsigned.ipa | head -40
+
+      - name: 上传 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: JJCheat-ipa
+          path: ${{ runner.temp }}/JJCheat-unsigned.ipa
+          if-no-files-found: error

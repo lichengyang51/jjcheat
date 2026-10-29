@@ -1,0 +1,10 @@
+{
+  Filter = {
+    Bundles = (
+      "com.jj.jjchess",
+      "com.jjgame.jjchess",
+      "com.jj.jjgame",
+      "cn.jj.jjchess"
+    );
+  };
+}

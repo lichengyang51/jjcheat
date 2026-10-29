@@ -1,0 +1,254 @@
+//
+//  ContentView.swift
+//  JJCheatApp —— 主界面
+//
+
+import SwiftUI
+import ReplayKit
+
+// MARK: - 录屏启动按钮（包装 RPSystemBroadcastPickerView）
+
+struct BroadcastPickerButton: UIViewRepresentable {
+
+    let extensionID: String
+    @Binding var trigger: Int
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var picker: RPSystemBroadcastPickerView?
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        host.backgroundColor = .clear
+
+        let picker = RPSystemBroadcastPickerView(frame: CGRect(x: 0, y: 0, width: 54, height: 54))
+        picker.preferredExtension = extensionID
+        picker.showsMicrophoneButton = false
+        picker.backgroundColor = .clear
+        // 把系统自带那颗按钮刷成全透明，只留我们的外观
+        for sub in picker.subviews {
+            if let b = sub as? UIButton {
+                b.setImage(nil, for: .normal)
+                b.backgroundColor = .clear
+            }
+        }
+        host.addSubview(picker)
+        context.coordinator.picker = picker
+        return host
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // trigger 变化时程序化触发点击
+        guard trigger > 0 else { return }
+        DispatchQueue.main.async {
+            if let picker = context.coordinator.picker {
+                for sub in picker.subviews {
+                    if let b = sub as? UIButton {
+                        b.sendActions(for: .allTouchEvents)
+                        break
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 主界面
+
+struct ContentView: View {
+
+    @StateObject private var model = AppModel()
+    @State private var pickerTrigger = 0
+    @State private var showCalibration = false
+    @State private var anchorView = UIView()
+
+    private let broadcastID = "com.fujiang.jjcheat.broadcast"
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 14) {
+
+                    statusBanner
+
+                    stepCard(num: "①", title: "开始录屏",
+                             desc: "点下面的按钮 → 选「JJCheat 录屏」→ 点「开始直播」") {
+                        Button {
+                            pickerTrigger += 1
+                        } label: {
+                            Label("开始录屏", systemImage: "record.circle")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.red.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                        // 把系统录屏选择器透明铺在按钮上，点按钮即弹系统面板
+                        .overlay(
+                            BroadcastPickerButton(extensionID: broadcastID,
+                                                  trigger: $pickerTrigger)
+                                .opacity(0.02)
+                        )
+                    }
+
+                    stepCard(num: "②", title: "校准棋盘",
+                             desc: "录屏开起来后，切到 JJ象棋 摆出棋盘，再回来点这里，在画面上点住棋盘最外圈 4 个角") {
+                        Button {
+                            showCalibration = true
+                        } label: {
+                            Label(model.calibrated ? "重新校准" : "点我校准",
+                                  systemImage: "viewfinder")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.blue.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                        .disabled(model.lastImage == nil)
+
+                        if model.calibrated {
+                            Button("重新学习棋盘（画面停在开局时点）") {
+                                model.forceRelearn()
+                            }
+                            .font(.footnote)
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    stepCard(num: "③", title: "打开画中画浮窗",
+                             desc: "浮窗会飘在 JJ象棋 上面，可拖动、可双指缩放。拖到棋盘位置放大，就等于给棋盘加了标注") {
+                        Button {
+                            model.startPiP(sourceView: anchorView)
+                        } label: {
+                            Label(model.pipActive ? "浮窗已启动" : "打开画中画",
+                                  systemImage: "pip")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(model.pipActive ? Color.green.opacity(0.85)
+                                                            : Color.purple.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                        .disabled(!model.learned)
+                    }
+
+                    resultCard
+
+                    Text(model.detail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding()
+            }
+            .navigationTitle("JJCheat 象棋辅助")
+            .navigationBarTitleDisplayMode(.inline)
+            .overlay(alignment: .topLeading) {
+                // PiP 的锚点视图，必须是 1pt 以上、在窗口层级里的可见 view
+                AnchorView(view: $anchorView)
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+            }
+            .sheet(isPresented: $showCalibration) {
+                if let img = model.lastImage {
+                    CalibrationView(image: img) { pts in
+                        model.applyCalibration(pts)
+                        showCalibration = false
+                    } onCancel: {
+                        showCalibration = false
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 子视图
+
+    private var statusBanner: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(model.connected ? Color.green : Color.orange)
+                    .frame(width: 9, height: 9)
+                Text(model.connected ? "录屏通道已连接" : "等待录屏")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text("帧 \(model.frameCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+            Text(model.status)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+
+    private var resultCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(model.moveText.isEmpty ? "—" : model.moveText)
+                    .font(.title2.bold())
+                    .foregroundColor(.primary)
+                Spacer()
+                Text(model.scoreText)
+                    .font(.title3.monospacedDigit())
+                    .foregroundColor(.red)
+            }
+            HStack {
+                Text(String(format: "胜率 %.1f%%", model.winrate))
+                    .font(.subheadline.monospacedDigit())
+                Spacer()
+                Text("深度 \(model.depth)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+            ProgressView(value: max(0, min(100, model.winrate)), total: 100)
+                .tint(.red)
+            Text(model.fen)
+                .font(.caption2.monospaced())
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+
+    private func stepCard<C: View>(num: String, title: String, desc: String,
+                                   @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(num).font(.headline).foregroundColor(.accentColor)
+                Text(title).font(.headline)
+            }
+            Text(desc).font(.caption).foregroundColor(.secondary)
+            content()
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+}
+
+// MARK: - 给 PiP 用的锚点视图
+
+struct AnchorView: UIViewRepresentable {
+    @Binding var view: UIView
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        DispatchQueue.main.async { self.view = v }
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async { self.view = uiView }
+    }
+}

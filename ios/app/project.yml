@@ -1,0 +1,75 @@
+name: JJCheat
+options:
+  bundleIdPrefix: com.fujiang
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_BITCODE: NO
+    ONLY_ACTIVE_ARCH: NO
+
+targets:
+  JJCheatApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: JJCheatApp
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Shared
+    resources:
+      - path: JJCheatApp/Resources
+    info:
+      path: JJCheatApp/Info.plist
+      properties:
+        CFBundleDisplayName: JJCheat
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - audio
+        NSLocalNetworkUsageDescription: 本机回环通信，用于接收屏幕录制帧
+        NSBonjourServices:
+          - _jjcheat._tcp
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - target: JJCheatBroadcast
+        embed: true
+
+  JJCheatBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: JJCheatBroadcast
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Shared
+    info:
+      path: JJCheatBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: JJCheat 录屏
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat.broadcast
+        TARGETED_DEVICE_FAMILY: "1"
