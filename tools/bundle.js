@@ -567,8 +567,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 自己的画中画是否压住了棋盘（压住了那几格在抓屏里就是浮窗自己画的米黄棋盘）
-      pipOverlap: (session.recognizer && session.recognizer.pipOverlap) ? 1 : 0,
+      // 自己的画中画是否真的盖住了棋盘的格子。
+      // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
+      // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
+      pipOverlap: ((cls.hiddenCount || 0) >= 2) ? 1 : 0,
       hiddenCells: (cls.hiddenCount || 0)
     };
 
@@ -597,7 +599,12 @@ var JJEngine = {
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
     var codesSettled = (session.codesStable >= 2);
 
-    if (codesSettled && cls.codes && codesUsable(cls.codes)) {
+    // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
+    //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
+    //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
+    //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
+    var firstLatch = !session.lastBoardFen;
+    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
       // 局面更新限流：最多每 700ms 换一次。
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
