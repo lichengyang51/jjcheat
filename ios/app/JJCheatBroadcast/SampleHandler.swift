@@ -31,12 +31,15 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var convertedCount: UInt64 = 0
     private var failedCount: UInt64 = 0
 
-    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 6fps）
-    private let stride: UInt64 = 10
+    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 10fps）
+    ///   原来 10（6fps）：落子后最坏要等 167ms 才有一帧，再叠加稳定判定就是半秒。
+    ///   441x958 的转换和回环传输都很便宜，提到 10fps 把「发现落子」压到 100ms 以内。
+    private let stride: UInt64 = 6
     /// 心跳间隔
     private let heartbeatEvery: UInt64 = 5
-    /// 降采样倍数：ReplayKit 给的是 882×1917，降 2 倍得 441×958，
-    /// 棋盘每格约 49×95 像素，识别余量足够；降 3 倍只有 294×639 偏糊
+    /// 降采样倍数：ReplayKit 给的是 882×1917，降 2 倍得 441×958。
+    ///   441x958 下棋盘每格约 47.9×46.4 像素，跑逐格真值回归 90/90 全对；
+    ///   再降一倍只剩 294×639、格距 32 像素，字形开始糊，不要再降。
     private let downscale = 2
 
     private var heartbeatTimer: DispatchSourceTimer?

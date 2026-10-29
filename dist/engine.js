@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T14:15:55.477Z
+ *  生成时间: 2026-10-29T14:23:32.669Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -4087,7 +4087,7 @@ var JJEngine = {
     }
     // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
-    var codesSettled = (session.codesStable >= 2);
+    var codesSettled = (session.codesStable >= 1);
 
     // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
     //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
@@ -4096,10 +4096,10 @@ var JJEngine = {
     var firstLatch = !session.lastBoardFen;
     if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
-      // 局面更新限流：最多每 700ms 换一次。
+      // 局面更新限流：最多每 350ms 换一次。（原来 700ms，落子后光这道闸就要多等半秒）
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
       var nowMs = Date.now();
-      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
+      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 350);
 
       if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
@@ -4144,12 +4144,33 @@ var JJEngine = {
     out.codesSettled = codesSettled ? 1 : 0;
 
     // 2) 到了我方走 → 算棋
+    //
+    // ★ 渐进加深（解决「落子后要等好几秒」）
+    //   原来是局面一变就一次跑满 1800ms，用户落子后要等将近两秒才看到着法。
+    //   现在同一个局面按 220 → 550 → 1200ms 三档依次加深：
+    //   第 1 帧就把浅一档的着法端出去（一般 0.3 秒内），
+    //   后续帧（局面没变）自动加深，浮窗上的着法会从「浅版」平滑换成「深版」。
+    //   局面一变就回到第 0 档，保证「刚走完立刻有回话」。
+    var LEVELS = [220, 550, 1200];
     var analyzeFen = directFen || session.tracker.fen;
-    if (out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen) {
+    var maxBudget = opts.timeMs || 1800;
+    if (session.searchKey !== analyzeFen) {
+      session.searchKey = analyzeFen;
+      session.searchLevel = 0;
+    }
+    var lvl = session.searchLevel || 0;
+    var budget = Math.min(maxBudget, LEVELS[Math.min(lvl, LEVELS.length - 1)]);
+    var needSearch = out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen;
+    // 局面没变但还没跑满三档 → 继续加深
+    if (!needSearch && budget > (session.lastBudget || 0)) needSearch = true;
+
+    if (needSearch) {
       var t0 = Date.now();
-      var res = ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
+      var res = ENG.analyze(analyzeFen, { timeMs: budget });
       var pos = new POS.Position(analyzeFen);
       var mv = C.ucciToMv(res.bestmove);
+      session.searchLevel = lvl + 1;
+      session.lastBudget = budget;
 
       // 完整缓存：中文着法、起止格、分值、胜率、深度、走子方
       // 否则下一帧走缓存分支时，着法就丢了，浮窗会退回「识别中…」
