@@ -11,16 +11,23 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # 必须 Xcode 16：新版 XcodeGen 生成 objectVersion 77，Xcode 15 读不了
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: 取代码
         uses: actions/checkout@v4
 
-      - name: 查看 Xcode 版本
+      - name: 选择 Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16'
+
+      - name: 查看工具链版本
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          swift --version
 
       - name: 安装 XcodeGen
         run: |
@@ -38,8 +45,12 @@ jobs:
         run: |
           cd ios/app
           xcodegen generate
+          echo "--- 生成的工程 ---"
           ls -la
-          ls -la JJCheat.xcodeproj || true
+          echo "--- objectVersion ---"
+          grep -m1 objectVersion JJCheat.xcodeproj/project.pbxproj || true
+          echo "--- schemes ---"
+          ls -la JJCheat.xcodeproj/xcshareddata/xcschemes/ || true
 
       - name: 编译（免签名）
         run: |
