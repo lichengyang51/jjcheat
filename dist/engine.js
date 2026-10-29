@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T14:52:25.731Z
+ *  生成时间: 2026-10-29T14:56:26.622Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2249,7 +2249,7 @@ function refineByPieces(pixels, w, h, corners) {
     const ratio = cw / ch;
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
-    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
     if (r.hits < 6) return;
     if (r.usable < 40) return;
     const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
@@ -2273,7 +2273,7 @@ function refineByPieces(pixels, w, h, corners) {
   {
     const sd = seeds[0];
     const rr = Math.min(sd.cw, sd.ch) * 0.30;
-    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, skipRect);
+    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, null);
     // 只有「浮窗真的压到棋盘」时才锁先验。
     // 没遮挡的画面里完整搜索更准（能吃到 0.1% 的格距差异）；
     // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
@@ -2292,7 +2292,7 @@ function refineByPieces(pixels, w, h, corners) {
             for (let b = -1; b <= 1; b++) {
               const x0 = sd.x0 + a * oS * sd.cw;
               const y0 = sd.y0 + b * oS * sd.ch;
-              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
+              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
               if (r.usable < 40) continue;
               // 只有明显更好（多命中 2 个以上）才离开先验
               if (r.hits >= pick.hits + 2) {
@@ -3106,28 +3106,11 @@ class BoardRecognizer {
       const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
       const warmR = (typeof s.warmR === 'number') ? s.warmR : 0;
 
-      // ★ 被自己的画中画盖住的格子
-      //   抓屏会把画中画窗口一起抓进去（实测 PiP 压住右上角时，
-      //   那几个格子的暖色占比是 100%、墨迹 0% —— 那是浮窗里的米黄棋盘）。
-      //   这种格子完全没有棋子的信息，必须判「未知」而不是硬判成棋子，
-      //   否则会凭空造出七八个卒，把整盘 FEN 搞成垃圾。
-      const pr = this.pipRect;
-      let inPip = false;
-      if (pr) {
-        const lc = this.lastStats;
-        if (lc && lc.pts) {
-          const px = lc.pts[sq * 2], py = lc.pts[sq * 2 + 1], pad = lc.cell * 0.35;
-          inPip = (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad);
-        }
-      }
-      if (inPip || (warmR > 0.93 && inkR < 0.06)) {
-        grid[sq] = EMPTY;
-        codes[sq] = 0;
-        conf[sq] = 0;
-        hidden[sq] = 1;
-        hiddenCount++;
-        continue;
-      }
+      // 【已删除「被画中画盖住的格子判未知」那段逻辑】
+      //   它按「暖色占比 > 93% 且几乎无墨」+「落在浮窗矩形内」两条判据把格子抹成空。
+      //   在真机抓屏上，空棋盘格也会被判成「暖色无墨」（抓屏色彩比真实截图更亮更饱和），
+      //   于是半盘格子被抹空、还因为浮窗矩形框偏弹出「浮窗挡棋盘」的假提示。
+      //   这条路走不通，直接去掉：格子一律按正常流程识别。
 
       const hasInk = (inkR >= inkTh);
       const hasFace = (warmR >= 0.28);
@@ -4057,11 +4040,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 自己的画中画是否真的盖住了棋盘的格子。
-      // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
-      // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
-      pipOverlap: ((cls.hiddenCount || 0) >= 2) ? 1 : 0,
-      hiddenCells: (cls.hiddenCount || 0)
+      // 遮挡提示已删除：真机抓屏下「暖色无墨」这个判据连空棋盘格都会命中，
+      // 会导致半盘被抹空 + 假报「挡住」。恒为 0，App 不再显示该提示。
+      pipOverlap: 0,
+      hiddenCells: 0
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN

@@ -429,9 +429,9 @@ final class AppModel: ObservableObject {
     }
 
     private var hudHint: String {
-        // 浮窗压住棋盘时必须先提示 —— 那几格在我们的抓屏里是看不见的，
-        // 越算越乱。让用户把浮窗拖开，是恢复识别的第一步。
-        if pipOverlap { return "浮窗挡棋盘，拖开它" }
+        // 「浮窗挡棋盘」这条提示已删除：
+        //   判据靠颜色猜浮窗位置，真机抓屏下连空棋盘格都会命中，
+        //   结果没挡也报、还把正常格子抹空，整盘直接用不了。
         if !calibrated {
             if statusKind == 3 { return "让整个棋盘完整出现在画面里" }
             return "切到 JJ象棋，等几秒自动识别"

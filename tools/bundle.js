@@ -567,11 +567,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 自己的画中画是否真的盖住了棋盘的格子。
-      // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
-      // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
-      pipOverlap: ((cls.hiddenCount || 0) >= 2) ? 1 : 0,
-      hiddenCells: (cls.hiddenCount || 0)
+      // 遮挡提示已删除：真机抓屏下「暖色无墨」这个判据连空棋盘格都会命中，
+      // 会导致半盘被抹空 + 假报「挡住」。恒为 0，App 不再显示该提示。
+      pipOverlap: 0,
+      hiddenCells: 0
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN
