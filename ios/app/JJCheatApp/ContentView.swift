@@ -113,13 +113,18 @@ struct ContentView: View {
                         }
                     }
 
-                    stepCard(num: "③", title: "我执红还是执黑",
-                             desc: "JJ象棋 红先走。设置对了才知道该你走还是该等对方") {
-                        Picker("我执", selection: $model.mySide) {
-                            Text("我执红（先走）").tag("red")
-                            Text("我执黑（后走）").tag("black")
+                    stepCard(num: "③", title: "我执红还是执黑（自动识别）",
+                             desc: "棋盘最下方那排永远是你这边，程序直接看那排棋子颜色判断，不用你选。识别结果：") {
+                        HStack(spacing: 8) {
+                            Text(model.mySide == "red" ? "🔴 我执红（先走）" : "⚫ 我执黑（后走）")
+                                .font(.subheadline.bold())
+                                .foregroundColor(model.mySide == "red" ? .red : .primary)
+                            Spacer()
+                            Text(model.isMyTurn ? "轮到我走" : "等对方走")
+                                .font(.caption)
+                                .foregroundColor(model.isMyTurn ? .green : .secondary)
                         }
-                        .pickerStyle(.segmented)
+                        .padding(.vertical, 4)
                     }
 
                     stepCard(num: "④", title: "兜底：手动校准",

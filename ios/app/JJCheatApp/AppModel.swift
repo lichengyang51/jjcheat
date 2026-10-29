@@ -129,15 +129,15 @@ final class AppModel: ObservableObject {
     static let mySideKey = "JJCheat.mySide"
 
     private func loadCalibration() {
-        if let s = UserDefaults.standard.string(forKey: Self.mySideKey), !s.isEmpty {
-            mySide = s
-        }
         if let saved = UserDefaults.standard.array(forKey: cornersKey) as? [[Double]], saved.count == 4 {
             JJEngine.shared.setCorners(saved)
             calibrated = true
             learned = UserDefaults.standard.bool(forKey: learnedKey)
-            calibState = .success
-            status = learned ? "已就绪" : "标定已存，等开局画面"
+            // 注意：这里不要把 calibState 设成 .success。
+            // 只要设了，一开 App 浮窗就显示「成功」且按钮点不动，
+            // 用户根本没法重新校准。保持 .idle，按钮显示「重校准」。
+            calibState = .idle
+            status = learned ? "已就绪（可点浮窗按钮重新校准）" : "标定已存，等开局画面"
         }
     }
 
@@ -392,6 +392,16 @@ final class AppModel: ObservableObject {
 
         let sideToMove = JJEngine.str(res, "sideToMove", "red")
         sideText = (sideToMove == "red") ? "红方" : "黑方"
+
+        // ★ 自动判定我执红还是执黑：
+        //   棋盘最下方那排永远是自己这边，程序直接看那排棋子的颜色。
+        let detected = JJEngine.str(res, "mySide")
+        if (detected == "red" || detected == "black") && detected != mySide {
+            mySide = detected
+            status = "自动识别：你执\(detected == "red" ? "红" : "黑")"
+            NSLog("[JJCheat] 自动识别执子方 = %@", detected)
+        }
+
         isMyTurn = (sideToMove == mySide)
 
         // 轮到我方才显示建议；对方回合只提示「等对方走」
@@ -436,9 +446,9 @@ final class AppModel: ObservableObject {
         }
         if !calibrated { return "点右上角「校准」按钮" }
         if !learned { return "请停在标准开局画面" }
-        if !isMyTurn { return "对方回合" }
+        if !isMyTurn { return "对方回合 · 你执\(mySide == "red" ? "红" : "黑")" }
         if !opponentMove.isEmpty { return "对方刚走 \(opponentMove)" }
-        return ""
+        return "你执\(mySide == "red" ? "红" : "黑")"
     }
 
     /// 把当前状态推到浮窗
@@ -452,7 +462,8 @@ final class AppModel: ObservableObject {
             sideText: sideText,
             hintText: hudHint,
             hasMove: calibrated && learned && isMyTurn && !moveText.isEmpty,
-            calibState: calibState
+            calibState: calibState,
+            isCalibrated: calibrated
         )
     }
 

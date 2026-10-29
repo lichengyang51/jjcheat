@@ -105,6 +105,34 @@ var TRK = __require('vision/tracker');
  *  一站式接口 —— 给 iOS / ObjC 调用
  * ============================================================ */
 
+/* ============================================================
+ *  棋盘朝向处理
+ *  用户执红时红子在下（标准朝向），执黑时 JJ象棋 会翻转棋盘、黑子在下。
+ *  引擎内部统一用「红在下」的标准坐标，所以画面翻转时要翻回来。
+ * ============================================================ */
+
+/** 上下翻转一张棋子编码表 */
+function flipPieceMap(map) {
+  var out = new Array(90).fill(0);
+  for (var sq = 0; sq < 90; sq++) {
+    var v = map[sq];
+    if (!v) continue;
+    var r = (sq / 9) | 0, c = sq % 9;
+    out[(9 - r) * 9 + c] = v;
+  }
+  return out;
+}
+
+/** 上下翻转一张三分类网格（返回新数组，不改原数组） */
+function flipGrid(grid) {
+  var out = new Int8Array(90);
+  for (var sq = 0; sq < 90; sq++) {
+    var r = (sq / 9) | 0, c = sq % 9;
+    out[(9 - r) * 9 + c] = grid[sq];
+  }
+  return out;
+}
+
 /**
  * 全局会话状态（单例）
  */
@@ -114,7 +142,8 @@ var session = {
   corners: null,
   lastFen: '',
   lastResult: null,
-  pending: false
+  pending: false,
+  flipped: false      // true = 黑在下（用户执黑）
 };
 
 var JJEngine = {
@@ -144,25 +173,40 @@ var JJEngine = {
   learnBoard: function (pixels, w, h) {
     if (!session.recognizer) throw new Error('未标定');
 
-    // 先备份：验证不通过要回滚，绝不能让错误的背景模型留下来污染识别
-    var backupBg = session.recognizer.bgModel;
-    var backupTpl = session.recognizer.templates;
-
     var stats = session.recognizer.sampleAll(pixels, w, h, true);
-    var empty = TRK.startEmptySquares();
-    session.recognizer.learnBackground(stats, empty);
-    session.recognizer.learnTemplates(stats, TRK.startPieceMap());
+
+    // ---- 先判断画面朝向：row 9（最下面一排）是红子还是黑子 ----
+    // 用户执红 → 红在下；执黑 → JJ象棋 翻转棋盘，黑在下。
+    var colorCls = null;
+    try { colorCls = session.recognizer.classifyByColor(stats); } catch (e) { colorCls = null; }
+    var bRed = 0, bBlack = 0;
+    if (colorCls) {
+      for (var c = 0; c < 9; c++) {
+        var v = colorCls.grid[9 * 9 + c];
+        if (v === 1) bRed++;
+        else if (v === 2) bBlack++;
+      }
+    }
+    session.flipped = (bBlack > bRed);
+
+    // 根据朝向选择棋子位置表（模板标签必须和画面对应）
+    var pieceMap = TRK.startPieceMap();
+    if (session.flipped) pieceMap = flipPieceMap(pieceMap);
+
+    session.recognizer.learnBackground(stats, []);
+    session.recognizer.learnTemplates(stats, pieceMap);
 
     // ---- 学完立刻用学到的模型识别同一帧，验证画面到底是不是开局 ----
     var verifyDiff = -1;
     var ok = false;
     try {
       var cls = session.recognizer.classify(stats);
+      var gotGrid = session.flipped ? flipGrid(cls.grid) : cls.grid;
       var expectedPos = new POS.Position(C.START_FEN);
       var expected = TRK.boardToGrid(expectedPos.board);
       var d = 0;
       for (var i = 0; i < 90; i++) {
-        if (cls.grid[i] !== expected[i]) d++;
+        if (gotGrid[i] !== expected[i]) d++;
       }
       verifyDiff = d;
       ok = (d <= 3);
@@ -171,9 +215,6 @@ var JJEngine = {
       ok = false;
     }
 
-    // 不再回滚：新算法用「暖色度双峰自适应」，即便画面不是标准开局，
-    // 学到的阈值本身依然有效（Otsu 不需要知道哪些格子是空的）。
-    // verifyDiff 只作为诊断信息返回，用来提示画面是否为标准开局。
     var learned = session.recognizer.bgModel ? 1 : 0;
     var warmTh = session.recognizer.bgModel ? session.recognizer.bgModel.warmThreshold : -1;
 
@@ -183,7 +224,11 @@ var JJEngine = {
       templateCount: session.recognizer.templateCount || 0,
       verifyDiff: verifyDiff,
       ok: ok,
-      isOpening: ok
+      isOpening: ok,
+      flipped: session.flipped ? 1 : 0,
+      mySide: session.flipped ? 'black' : 'red',
+      bottomRed: bRed,
+      bottomBlack: bBlack
     };
   },
 
@@ -241,7 +286,14 @@ var JJEngine = {
     // 模板匹配需要 patch，所以这里必须采
     var stats = session.recognizer.sampleAll(pixels, w, h, true);
     var cls = session.recognizer.classify(stats);
-    var grid = cls.grid;
+    // 画面翻转时（用户执黑）翻回标准坐标，引擎内部一律「红在下」
+    var grid = session.flipped ? flipGrid(cls.grid) : cls.grid;
+
+    // ★ 自动判定「我执红还是执黑」
+    //   由画面朝向决定：黑在下 = 我执黑，红在下 = 我执红。
+    var mySideDetected = session.flipped ? 'black' : 'red';
+    var bottomRed = mySideDetected === 'red' ? 1 : 0;
+    var bottomBlack = mySideDetected === 'black' ? 1 : 0;
 
     // 1) 尝试推进一步棋
     var moved = session.tracker.tryAdvance(grid, opts.maxDiff === undefined ? 1 : opts.maxDiff);
@@ -249,7 +301,10 @@ var JJEngine = {
     var out = {
       grid: Array.prototype.slice.call(grid),
       fen: session.tracker.fen,
-      moveDetected: false
+      moveDetected: false,
+      mySide: mySideDetected,
+      bottomRed: bottomRed,
+      bottomBlack: bottomBlack
     };
 
     if (moved && !moved.fail) {

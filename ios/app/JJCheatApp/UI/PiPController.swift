@@ -94,7 +94,8 @@ final class PiPController: NSObject {
                 sideText: String,
                 hintText: String,
                 hasMove: Bool,
-                calibState: HUDCalibState) {
+                calibState: HUDCalibState,
+                isCalibrated: Bool) {
         hudView.moveText = moveText
         hudView.scoreText = scoreText
         hudView.winrate = winrate
@@ -103,6 +104,7 @@ final class PiPController: NSObject {
         hudView.hintText = hintText
         hudView.hasMove = hasMove
         hudView.calibState = calibState
+        hudView.isCalibrated = isCalibrated
     }
 
     // MARK: - 音频会话

@@ -35,6 +35,8 @@ final class CompactHUDView: UIView {
     var hintText: String = "" { didSet { setNeedsDisplay() } }
     var hasMove: Bool = false { didSet { setNeedsDisplay() } }
     var calibState: HUDCalibState = .idle { didSet { setNeedsDisplay() } }
+    /// 是否已经校准过（决定按钮显示「校准」还是「重校准」）
+    var isCalibrated: Bool = false { didSet { setNeedsDisplay() } }
 
     /// 点击「校准」按钮的回调
     var onCalibrateTap: (() -> Void)?
@@ -62,11 +64,10 @@ final class CompactHUDView: UIView {
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         let p = g.location(in: self)
-        // 按钮区域够大，手指点得准
+        // 只要不在「校准中」，随时可点（成功状态也能点 = 重新校准）
+        if calibState == .detecting { return }
         if calibButtonRect.insetBy(dx: -10, dy: -8).contains(p) {
-            if calibState == .idle || calibState == .failed {
-                onCalibrateTap?()
-            }
+            onCalibrateTap?()
         }
     }
 
@@ -161,6 +162,9 @@ final class CompactHUDView: UIView {
         let (bgColor, title, textColor): (UIColor, String, UIColor) = {
             switch calibState {
             case .idle:
+                if isCalibrated {
+                    return (UIColor(red: 0.28, green: 0.36, blue: 0.55, alpha: 0.95), "重校准", .white)
+                }
                 return (UIColor(red: 0.15, green: 0.55, blue: 0.95, alpha: 0.95), "校准", .white)
             case .detecting:
                 return (UIColor(red: 0.90, green: 0.60, blue: 0.10, alpha: 0.95), "校准中", .white)
