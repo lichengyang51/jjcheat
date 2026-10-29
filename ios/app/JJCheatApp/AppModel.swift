@@ -58,6 +58,10 @@ final class AppModel: ObservableObject {
     /// 浮窗状态：0 灰未就绪 / 1 蓝校准中 / 2 绿就绪 / 3 红失败
     @Published var statusKind: Int = 0
 
+    /// 自己的画中画是否压住了棋盘（引擎 findPipRect 反向检测）
+    ///  压住了那几格在抓屏里就是浮窗自己的米黄棋盘，识别必然错，必须先提醒拖开。
+    @Published var pipOverlap: Bool = false
+
     private var autoCalibAttempts = 0
     private let autoCalibGiveUp = 40      // 约 5 秒还找不到就报失败
 
@@ -385,6 +389,13 @@ final class AppModel: ObservableObject {
         isMyTurn = true
         moveText = JJEngine.str(res, "suggestChinese")
 
+        // 浮窗压住棋盘了吗？（引擎会把自己画的米黄棋盘找出来）
+        let overlap = JJEngine.int(res, "pipOverlap", 0) == 1
+        if overlap != pipOverlap {
+            pipOverlap = overlap
+            NSLog("[JJCheat] 浮窗压住棋盘 = %@", overlap ? "是" : "否")
+        }
+
         detail = "\(sideText)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames)"
 
         if JJEngine.bool(res, "moveDetected") {
@@ -412,6 +423,9 @@ final class AppModel: ObservableObject {
     }
 
     private var hudHint: String {
+        // 浮窗压住棋盘时必须先提示 —— 那几格在我们的抓屏里是看不见的，
+        // 越算越乱。让用户把浮窗拖开，是恢复识别的第一步。
+        if pipOverlap { return "浮窗挡住棋盘了，拖到上方或下方" }
         if !calibrated {
             if statusKind == 3 { return "让整个棋盘完整出现在画面里" }
             return "切到 JJ象棋，等几秒自动识别"

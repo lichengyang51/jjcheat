@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T13:57:25.786Z
+ *  生成时间: 2026-10-29T14:10:59.639Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2042,10 +2042,15 @@ function findPeaks1D(proj, len, minGap, relTh) {
  * 这一步之后格距误差 < 1 像素，采样子弹不再打偏。
  * ============================================================ */
 
-/** JJ象棋 棋盘在整屏截图中的归一化位置（多张真实截图反解，四张完全一致） */
+/** JJ象棋 棋盘在整屏截图中的归一化位置
+ *  由「棋子圆盘全格对齐搜索」在多张真实截图上反解，再用逐格真值验证
+ *  （450 格只错 1 格），是所有样本共同收敛到的同一组值。
+ *  用它当定位起点：命中数够就直接采用，避免被遮挡物带偏。 */
 const BOARD_PRIOR = {
-  x0: 0.0666, cw: 0.1078,
-  y0: 0.2773, ch: 0.0484
+  x0: 0.065731,
+  cw: 0.108391,
+  y0: 0.277100,
+  ch: 0.048350
 };
 
 /** 棋子圆盘掩码 + 积分图（用来 O(1) 求任意方框内的圆盘密度） */
@@ -2075,9 +2080,95 @@ function buildDiskIntegral(pixels, w, h) {
   return { integ: integ, iw: iw, count: (function () { let n = 0; for (let i = 0; i < mask.length; i++) n += mask[i]; return n; })() };
 }
 
+/**
+ * 找出「画中画浮窗棋盘」占据的矩形
+ *
+ * 抓屏会把画中画窗口一起抓进去（实测浮窗压住棋盘右上角时，
+ * 那几个交叉点的暖色占比是 100%、墨迹 0% —— 那是浮窗里自己画的米黄棋盘）。
+ * 浮窗棋盘底色实测 (227,203,161) L=205，比游戏棋盘空白（L≈170）
+ * 和棋子盘面（L≈120~191）都亮得多，用亮度就能整块切出来。
+ *
+ * @returns {{x0,y0,x1,y1}|null}
+ */
+function findPipRect(pixels, w, h) {
+  // 先按 16x16 分块统计「浮窗米黄」占比。
+  // 直接用所有命中像素求外接矩形会被画面里零散的高光点撑满整屏（实测过），
+  // 所以必须先分块、再挑最大的连通块。
+  const BS = 16;
+  const bw = Math.ceil(w / BS), bh = Math.ceil(h / BS);
+  const ratio = new Float32Array(bw * bh);
+  const total = new Int32Array(bw * bh);
+  const hit = new Int32Array(bw * bh);
+
+  for (let y = 0; y < h; y++) {
+    const by = (y / BS) | 0;
+    const base = y * w;
+    for (let x = 0; x < w; x++) {
+      const bi = by * bw + ((x / BS) | 0);
+      total[bi]++;
+      const i = (base + x) * 4;
+      const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+      if (R <= 205 || G <= 180 || B <= 135) continue;
+      if ((R - B) <= 45) continue;
+      const L = 0.299 * R + 0.587 * G + 0.114 * B;
+      if (L <= 198) continue;
+      hit[bi]++;
+    }
+  }
+  for (let i = 0; i < ratio.length; i++) ratio[i] = total[i] ? hit[i] / total[i] : 0;
+
+  // 连通块标记（4 邻域）
+  const lab = new Int32Array(bw * bh).fill(-1);
+  const stack = new Int32Array(bw * bh);
+  let bestBox = null, bestArea = 0;
+
+  for (let s = 0; s < ratio.length; s++) {
+    if (ratio[s] < 0.60 || lab[s] >= 0) continue;
+    let sp = 0;
+    stack[sp++] = s;
+    lab[s] = s;
+    let n = 0, mnx = bw, mxx = -1, mny = bh, mxy = -1;
+    while (sp > 0) {
+      const p = stack[--sp];
+      const py = (p / bw) | 0, px = p % bw;
+      n++;
+      if (px < mnx) mnx = px;
+      if (px > mxx) mxx = px;
+      if (py < mny) mny = py;
+      if (py > mxy) mxy = py;
+      for (let k = 0; k < 4; k++) {
+        let q;
+        if (k === 0) { if (px === 0) continue; q = p - 1; }
+        else if (k === 1) { if (px === bw - 1) continue; q = p + 1; }
+        else if (k === 2) q = p - bw;
+        else q = p + bw;
+        if (q < 0 || q >= ratio.length || lab[q] >= 0) continue;
+        if (ratio[q] < 0.60) continue;
+        lab[q] = s;
+        stack[sp++] = q;
+      }
+    }
+    if (n > bestArea) {
+      bestArea = n;
+      bestBox = {
+        x0: mnx * BS, y0: mny * BS,
+        x1: Math.min(w - 1, (mxx + 1) * BS - 1),
+        y1: Math.min(h - 1, (mxy + 1) * BS - 1),
+        blocks: n
+      };
+    }
+  }
+
+  if (!bestBox) return null;
+  if (bestArea < 30) return null;                                   // 太小，不是浮窗
+  const rw = bestBox.x1 - bestBox.x0, rh = bestBox.y1 - bestBox.y0;
+  if (rw < w * 0.15 || rh < h * 0.05) return null;
+  return bestBox;
+}
+
 /** 给定一组网格参数，统计 90 个交叉点上的棋子圆盘命中情况 */
-function gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rad) {
-  let score = 0, hits = 0;
+function gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rad, skip) {
+  let score = 0, hits = 0, usable = 0;
   const rr = Math.max(2, Math.round(rad));
   for (let r = 0; r < 10; r++) {
     const y = y0 + r * ch;
@@ -2087,6 +2178,9 @@ function gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rad) {
       const x = x0 + c * cw;
       const xa = Math.round(x - rr), xb = Math.round(x + rr);
       if (xa < 0 || xb >= w) continue;
+      // 落在浮窗区域里的交叉点不参与打分 —— 那块是被自己浮窗盖住的，
+      // 里面是我们自己画的米黄棋盘，拿它当「棋子」会把网格整体拉偏。
+      if (skip && x >= skip.x0 && x <= skip.x1 && y >= skip.y0 && y <= skip.y1) continue;
       const a = integ[ya * iw + xa];
       const b = integ[ya * iw + xb + 1];
       const cc = integ[(yb + 1) * iw + xa];
@@ -2094,10 +2188,11 @@ function gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rad) {
       const area = (xb - xa + 1) * (yb - ya + 1);
       const dens = (d - b - cc + a) / area;
       score += dens;
+      usable++;
       if (dens > 0.35) hits++;
     }
   }
-  return { score: score, hits: hits };
+  return { score: score, hits: hits, usable: usable };
 }
 
 /**
@@ -2128,7 +2223,24 @@ function refineByPieces(pixels, w, h, corners) {
     }
   }
 
+  // 先找出自己浮窗盖住的矩形，打分时跳过那块
+  const skipRect = findPipRect(pixels, w, h);
+
+  // 先验基准（用于「离先验多远」的打分）
+  const priorRef = seeds[0];
+
+  function devOf(x0, cw, y0, ch) {
+    // 以「格」为单位衡量偏离先验的程度
+    return Math.abs(x0 - priorRef.x0) / Math.max(1, priorRef.cw)
+      + Math.abs(y0 - priorRef.y0) / Math.max(1, priorRef.ch)
+      + Math.abs(cw - priorRef.cw) / Math.max(1, priorRef.cw) * 8
+      + Math.abs(ch - priorRef.ch) / Math.max(1, priorRef.ch) * 9;
+  }
+
   let best = null;
+  let coarse = true;
+  let locked = false;
+  const coarseCands = [];
 
   function consider(x0, cw, y0, ch, tag) {
     // 边界与比例检查
@@ -2137,32 +2249,107 @@ function refineByPieces(pixels, w, h, corners) {
     const ratio = cw / ch;
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
-    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr);
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
     if (r.hits < 6) return;
-    if (!best || r.hits > best.hits || (r.hits === best.hits && r.score > best.score)) {
-      best = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag };
+    if (r.usable < 40) return;
+    const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
+    if (!best || r.hits > best.hits || (r.hits === best.hits && r.score > best.score)) best = cand;
+    if (coarse) coarseCands.push(cand);
+    return cand;
+  }
+
+  // ---- 粗搜 ----
+  // ---- 先验优先：布局是死的，先验命中够多就别让搜索跑野 ----
+  //
+  // JJ象棋 的棋盘位置是固定布局（5 张真实截图反解出来完全一致：
+  //   x0/W=0.0666  cw/W=0.1078  y0/H=0.2773  ch/H=0.0484）。
+  // 一旦有东西被遮住（画中画挡住右上角 8 个交叉点），能参与打分的点就少了，
+  // 搜索会找到一组「歪着的网格」，命中数反而多 1~4 个（浮窗边缘的高光被当成棋子），
+  // 结果整盘采样点集体偏移 6~7 像素，第 0 排的車就被认成卒。
+  //
+  // 所以：先验的命中数只要够（>=16 个交叉点有棋子），就直接采用先验，
+  // 只在 ±0.04 格 / ±0.8% 的极小窗口里微调（吸收不同机型的细微差异）。
+  // 先验命中太少（换机型、换主题、或根本不是对局画面）才走完整搜索。
+  {
+    const sd = seeds[0];
+    const rr = Math.min(sd.cw, sd.ch) * 0.30;
+    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, skipRect);
+    // 只有「浮窗真的压到棋盘」时才锁先验。
+    // 没遮挡的画面里完整搜索更准（能吃到 0.1% 的格距差异）；
+    // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
+    const bx0 = sd.x0 - sd.cw * 0.5, bx1 = sd.x0 + sd.cw * 8.5;
+    const by0 = sd.y0 - sd.ch * 0.5, by1 = sd.y0 + sd.ch * 9.5;
+    const occluded = !!(skipRect && skipRect.x1 >= bx0 && skipRect.x0 <= bx1
+      && skipRect.y1 >= by0 && skipRect.y0 <= by1);
+    if (occluded && base.hits >= 16 && base.usable >= 40) {
+      let pick = { x0: sd.x0, cw: sd.cw, y0: sd.y0, ch: sd.ch, hits: base.hits, score: base.score, dev: 0, tag: 'prior-fixed' };
+      const oS = 0.02, sS = 0.004;
+      for (let i = -1; i <= 1; i++) {
+        for (let j = -1; j <= 1; j++) {
+          const cw = sd.cw * (1 + i * sS);
+          const ch = sd.ch * (1 + j * sS);
+          for (let a = -1; a <= 1; a++) {
+            for (let b = -1; b <= 1; b++) {
+              const x0 = sd.x0 + a * oS * sd.cw;
+              const y0 = sd.y0 + b * oS * sd.ch;
+              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
+              if (r.usable < 40) continue;
+              // 只有明显更好（多命中 2 个以上）才离开先验
+              if (r.hits >= pick.hits + 2) {
+                pick = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, dev: devOf(x0, cw, y0, ch), tag: 'prior-polish' };
+              }
+            }
+          }
+        }
+      }
+      best = pick;
+      locked = true;
+      coarseCands.length = 0;
     }
   }
 
-  // ---- 粗搜：格距 ±6%，起点 ±0.6 格 ----
+  // ---- 粗搜 ----
+  //   prior 种子（归一化先验）用窄窗口；edges 种子（边缘投影）误差大，才需要宽窗口。
   for (let s = 0; s < seeds.length; s++) {
+    if (best) break;                      // 先验已经定案，不用再搜
     const sd = seeds[s];
-    for (let i = -2; i <= 2; i++) {
-      for (let j = -2; j <= 2; j++) {
-        const cw = sd.cw * (1 + i * 0.03);
-        const ch = sd.ch * (1 + j * 0.03);
-        for (let a = -3; a <= 3; a++) {
-          for (let b = -3; b <= 3; b++) {
-            consider(sd.x0 + a * 0.2 * sd.cw, cw, sd.y0 + b * 0.2 * sd.ch, ch, sd.tag);
+    const tight = (sd.tag === 'prior');
+    const nScale = tight ? 1 : 2;
+    const nOrigin = tight ? 2 : 3;
+    const sStep = tight ? 0.015 : 0.03;   // 先验种子：格距只搜 ±1.5%
+    const oStep = tight ? 0.05 : 0.2;     // 先验种子：起点只搜 ±0.1 格
+    for (let i = -nScale; i <= nScale; i++) {
+      for (let j = -nScale; j <= nScale; j++) {
+        const cw = sd.cw * (1 + i * sStep);
+        const ch = sd.ch * (1 + j * sStep);
+        for (let a = -nOrigin; a <= nOrigin; a++) {
+          for (let b = -nOrigin; b <= nOrigin; b++) {
+            consider(sd.x0 + a * oStep * sd.cw, cw, sd.y0 + b * oStep * sd.ch, ch, sd.tag);
           }
         }
       }
     }
   }
   if (!best) return null;
+  coarse = false;
+
+  // 粗搜定案：命中数相差 2 格以内时，选「离先验最近」的那组。
+  // 画中画挡住右上角后，被遮住的交叉点不参与打分，歪着的网格命中数可能反而多 1~2 个
+  // （浮窗边缘的高光被当成棋子）。而 JJ象棋 布局是死的，正确网格一定贴着先验。
+  if (coarseCands.length) {
+    let mx = 0;
+    for (let ci = 0; ci < coarseCands.length; ci++) if (coarseCands[ci].hits > mx) mx = coarseCands[ci].hits;
+    let pick = null;
+    for (let ci = 0; ci < coarseCands.length; ci++) {
+      const c = coarseCands[ci];
+      if (c.hits < mx - 6) continue;
+      if (!pick || c.dev < pick.dev || (c.dev === pick.dev && c.score > pick.score)) pick = c;
+    }
+    if (pick) best = pick;
+  }
 
   // ---- 细搜：格距 ±1.5%，起点 ±0.1 格 ----
-  {
+  if (!locked) {
     const b0 = best;
     for (let i = -1; i <= 1; i++) {
       for (let j = -1; j <= 1; j++) {
@@ -2178,7 +2365,7 @@ function refineByPieces(pixels, w, h, corners) {
   }
 
   // ---- 超细：格距 ±0.4%，起点 ±0.02 格 ----
-  {
+  if (!locked) {
     const b0 = best;
     for (let i = -1; i <= 1; i++) {
       for (let j = -1; j <= 1; j++) {
@@ -2199,7 +2386,7 @@ function refineByPieces(pixels, w, h, corners) {
 
   refineByPieces.lastDebug = {
     cellW: best.cw, cellH: best.ch, ratio: best.cw / best.ch,
-    hits: best.hits, score: best.score, seed: best.tag,
+    hits: best.hits, score: best.score, seed: best.tag, pipRect: skipRect,
     x0: best.x0, y0: best.y0, diskPixels: di.count
   };
 
@@ -2596,6 +2783,13 @@ class BoardRecognizer {
       out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch);
     }
     this.lastStats = { pts, cell, radius };
+    // 顺便记下自己画中画的位置：既能用来跳过被遮挡的交叉点，
+    // 也能让 App 端提醒用户「浮窗挡住棋盘了，拖走」。
+    this.pipRect = findPipRect(pixels, w, h);
+    this.pipOverlap = !!(this.pipRect && this.pipRect.y1 >= pts[1] - cell * 0.6
+      && this.pipRect.y0 <= pts[9 * 9 * 2 + 1] + cell * 0.6
+      && this.pipRect.x1 >= pts[0] - cell * 0.6
+      && this.pipRect.x0 <= pts[8 * 2] + cell * 0.6);
     if (wantPatch && this.templates && this.enableLowConfRefine) {
       this.refineLowConfidence(out, pixels, w, h, pts, cell, radius);
     }
@@ -2895,6 +3089,9 @@ class BoardRecognizer {
     const codes = new Int8Array(90);
     const conf = new Float32Array(90);
     const rankedCodes = new Array(90);
+    const hidden = new Uint8Array(90);
+    const margins = new Float32Array(90);
+    let hiddenCount = 0;
     let tplFail = 0;
 
     for (let sq = 0; sq < 90; sq++) {
@@ -2908,6 +3105,30 @@ class BoardRecognizer {
 
       const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
       const warmR = (typeof s.warmR === 'number') ? s.warmR : 0;
+
+      // ★ 被自己的画中画盖住的格子
+      //   抓屏会把画中画窗口一起抓进去（实测 PiP 压住右上角时，
+      //   那几个格子的暖色占比是 100%、墨迹 0% —— 那是浮窗里的米黄棋盘）。
+      //   这种格子完全没有棋子的信息，必须判「未知」而不是硬判成棋子，
+      //   否则会凭空造出七八个卒，把整盘 FEN 搞成垃圾。
+      const pr = this.pipRect;
+      let inPip = false;
+      if (pr) {
+        const lc = this.lastStats;
+        if (lc && lc.pts) {
+          const px = lc.pts[sq * 2], py = lc.pts[sq * 2 + 1], pad = lc.cell * 0.35;
+          inPip = (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad);
+        }
+      }
+      if (inPip || (warmR > 0.93 && inkR < 0.06)) {
+        grid[sq] = EMPTY;
+        codes[sq] = 0;
+        conf[sq] = 0;
+        hidden[sq] = 1;
+        hiddenCount++;
+        continue;
+      }
+
       const hasInk = (inkR >= inkTh);
       const hasFace = (warmR >= 0.28);
       if (!hasInk && !hasFace) {
@@ -2937,6 +3158,8 @@ class BoardRecognizer {
       // 3) 模板只用来认兵种
       const r = this.matchCell(s);
       conf[sq] = r.score;
+      // 记下「第一名和第二名的分差」—— 分差小说明没把握，数量约束修复只动这些格子
+      margins[sq] = (r.alts && r.alts.length > 1) ? (r.alts[0].score - r.alts[1].score) : 99;
 
       if (r.key === 'E') {
         // 模板说空。
@@ -2990,6 +3213,10 @@ class BoardRecognizer {
     // 实测最有价值的一条：红方本来只有两个馬，某一格把带高亮圈的红俥
     // 认成紅傌，就会出现「三个馬」，改成車之后局面立刻合法。
     const LIMIT = [0, 1, 2, 2, 2, 2, 2, 5];
+    // 有格子被浮窗盖住时，棋子总数本身就是错的，这时候做数量修复只会更乱
+    const allowRepair = (hiddenCount === 0);
+    const MARGIN_MAX = 0.35;   // 只动「第一名和第二名分差很小」的格子
+    const MAX_REPAIR = 4;      // 最多改 4 格，防止雪崩
     const cnt = [new Array(8).fill(0), new Array(8).fill(0)];
     for (let sq = 0; sq < 90; sq++) {
       const v = codes[sq];
@@ -3001,22 +3228,16 @@ class BoardRecognizer {
     for (let sq = 0; sq < 90; sq++) {
       const v = codes[sq];
       if (!v) continue;
-      const alts = (stats[sq] && stats[sq].alts) || null;
-      const ranked = rankedCodes[sq] || [];
-      let margin = 99;
-      if (ranked.length >= 2) {
-        // 用 conf 里存的分数差做近似：候选中排第二的那个已经不在 codes 里，
-        // 这里用 conf 与「最佳替代」的差值估计。简化为 conf 越小越先修。
-        margin = conf[sq];
-      }
+      const margin = margins[sq];
+      if (margin > MARGIN_MAX) continue;   // 有把握的格子不碰
       const side = v <= 7 ? 0 : 1;
       const t = v <= 7 ? v : v - 7;
-      if (cnt[side][t] > LIMIT[t]) order.push({ sq: sq, key: margin });
+      if (allowRepair && cnt[side][t] > LIMIT[t]) order.push({ sq: sq, key: margin });
     }
     order.sort((a, b) => a.key - b.key);
 
     let repaired = 0;
-    for (let oi = 0; oi < order.length; oi++) {
+    for (let oi = 0; oi < order.length && repaired < MAX_REPAIR; oi++) {
       const sq = order[oi].sq;
       const v = codes[sq];
       if (!v) continue;
@@ -3040,7 +3261,7 @@ class BoardRecognizer {
       }
     }
 
-    return { grid, conf, codes, tplFail, repaired };
+    return { grid, conf, codes, tplFail, repaired: repaired, hidden: hidden, hiddenCount: hiddenCount };
   }
 
   /**
@@ -3109,7 +3330,7 @@ module.exports = {
   BoardRecognizer, EMPTY, RED_PC, BLK_PC,
   bilinear, homography, applyH,
   autoDetectBoard, findEvenlySpacedPeaks,
-  refineByPieces, refineGrid, fitEvenLines, findPeaks1D
+  refineByPieces, refineGrid, fitEvenLines, findPeaks1D, findPipRect, gridAlignScore
 };
 
 };
@@ -3835,7 +4056,10 @@ var JJEngine = {
       mySide: mySideDetected,
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
-      stable: isStable ? 1 : 0
+      stable: isStable ? 1 : 0,
+      // 自己的画中画是否压住了棋盘（压住了那几格在抓屏里就是浮窗自己画的米黄棋盘）
+      pipOverlap: (session.recognizer && session.recognizer.pipOverlap) ? 1 : 0,
+      hiddenCells: (cls.hiddenCount || 0)
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN

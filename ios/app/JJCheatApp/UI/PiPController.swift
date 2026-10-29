@@ -18,11 +18,18 @@ final class PiPController: NSObject {
     private var host: AVPictureInPictureVideoCallViewController?
     private var container: UIViewController?
 
-    /// 文字条 + 棋盘
-    let hudView = ChessHUDView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+    /// 浮窗内容 = 左边棋盘 + 右边文字（横版）
+    ///
+    /// 【为什么必须横版】抓屏会把画中画窗口本身也抓进去。
+    /// 原来是 320x400 竖版，系统摆在右上角后底边压到棋盘第 0~1 排，
+    /// 那几格在我们的抓屏里就成了浮窗自己的米黄棋盘，被当成棋子，
+    /// 凭空多出七八个卒，还把网格拟合拉偏 7 像素（第 0 排的車被认成卒）。
+    /// 320x180 渲染出来约 260x146：无论系统放右上还是右下都不会碰到棋盘
+    /// （棋盘在屏幕上占 y 345~911）。
+    let hudView = ChessHUDView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
 
-    /// 浮窗尺寸：宽 320，文字条 62 + 棋盘 338
-    var preferredSize = CGSize(width: 320, height: 400)
+    /// 浮窗尺寸：16:9 横版
+    var preferredSize = CGSize(width: 320, height: 180)
 
     private(set) var isActive = false
     var onStateChange: ((Bool, String?) -> Void)?

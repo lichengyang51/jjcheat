@@ -566,7 +566,10 @@ var JJEngine = {
       mySide: mySideDetected,
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
-      stable: isStable ? 1 : 0
+      stable: isStable ? 1 : 0,
+      // 自己的画中画是否压住了棋盘（压住了那几格在抓屏里就是浮窗自己画的米黄棋盘）
+      pipOverlap: (session.recognizer && session.recognizer.pipOverlap) ? 1 : 0,
+      hiddenCells: (cls.hiddenCount || 0)
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN
