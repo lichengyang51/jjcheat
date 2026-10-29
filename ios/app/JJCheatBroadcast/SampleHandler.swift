@@ -147,11 +147,9 @@ final class FrameClient {
                 // 显式走 Darwin 命名空间：本类有同名实例方法 close()/connect()，
                 // 不加前缀会被 Swift 优先解析到实例方法上
                 Darwin.close(s)
-                // 主 App 可能还没起监听，退避重试；上限 120 次（约 60 秒）
-                if retry < 120 {
-                    self.queue.asyncAfter(deadline: .now() + 0.5) {
-                        self.connect(retry: retry + 1)
-                    }
+                // 主 App 可能被系统挂起了，一直退避重试（每 0.5 秒一次，不设上限）
+                self.queue.asyncAfter(deadline: .now() + 0.5) {
+                    self.connect(retry: retry &+ 1)
                 }
                 return
             }

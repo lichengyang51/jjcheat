@@ -76,6 +76,14 @@ final class FrameServer {
         isRunning = false
     }
 
+    /// 从后台恢复时用：彻底重建监听（旧 socket 可能已经死了但 isRunning 还是 true）
+    func restart() {
+        stop()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.start()
+        }
+    }
+
     // MARK: - 连接
 
     private func accept(_ conn: NWConnection) {

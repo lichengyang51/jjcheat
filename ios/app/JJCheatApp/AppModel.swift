@@ -2,6 +2,11 @@
 //  AppModel.swift
 //  JJCheatApp —— 全局状态与主循环
 //
+//  关键设计：
+//   · 静音音频保活，防止退到后台后进程被挂起、TCP 监听断掉
+//   · 回到前台时重建监听（旧监听可能已死）
+//   · 所有诊断信息都暴露到 UI，出问题一眼能看出卡在哪一环
+//
 
 import Foundation
 import UIKit
@@ -10,11 +15,16 @@ import ReplayKit
 
 final class AppModel: ObservableObject {
 
+    // 通道状态
     @Published var connected = false
-    @Published var frameCount: UInt64 = 0
+    @Published var serverRunning = false
+    @Published var receivedFrames: UInt64 = 0
+    @Published var lastFrameAt: Date?
     @Published var lastImage: UIImage?
     @Published var frameSize: CGSize = .zero
+    @Published var extID: String = ExtensionInfo.broadcastBundleID
 
+    // 引擎输出
     @Published var fen = BoardRenderView.startFen
     @Published var moveText = ""
     @Published var scoreText = ""
@@ -23,6 +33,7 @@ final class AppModel: ObservableObject {
     @Published var fromSq = -1
     @Published var toSq = -1
 
+    // 流程状态
     @Published var calibrated = false
     @Published var learned = false
     @Published var pipActive = false
@@ -31,18 +42,48 @@ final class AppModel: ObservableObject {
 
     private var busy = false
     private let processQueue = DispatchQueue(label: "com.fujiang.jjcheat.process", qos: .userInitiated)
-
-    let corners: [[Double]] = []   // 占位，真实值存 UserDefaults
+    private var observers: [NSObjectProtocol] = []
 
     init() {
         JJEngine.shared.loadIfNeeded()
+
         FrameServer.shared.onFrame = { [weak self] frame in
             self?.handle(frame)
         }
         FrameServer.shared.onStateChange = { [weak self] up in
-            self?.connected = up
+            guard let self else { return }
+            self.connected = up
+            self.serverRunning = FrameServer.shared.isRunning
         }
+
         loadCalibration()
+
+        // 保活：真的播放一段无声 WAV，配合 Info.plist 的 audio 后台模式
+        AudioKeepAlive.shared.start()
+
+        // 回到前台 → 重建监听 + 重启保活
+        let o1 = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                AudioKeepAlive.shared.start()
+                FrameServer.shared.restart()
+                self.serverRunning = true
+            }
+        // 进后台 → 确保保活在跑
+        let o2 = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main) { _ in
+                AudioKeepAlive.shared.start()
+            }
+        observers = [o1, o2]
+
+        FrameServer.shared.start()
+        serverRunning = FrameServer.shared.isRunning
+    }
+
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: - 标定持久化
@@ -77,14 +118,29 @@ final class AppModel: ObservableObject {
         status = "请让画面停在标准开局，正在重新学习…"
     }
 
+    /// 校准按钮点击前的自检，返回 nil 表示可以进校准
+    func calibrationBlocker() -> String? {
+        if !serverRunning {
+            return "后台接收通道没起来。回主界面等一下，或重开录屏。"
+        }
+        if receivedFrames == 0 {
+            return "还没收到任何录屏画面。请确认：\n① 控制中心/灵动岛有红点（录屏在跑）\n② 录屏里选的是「JJCheat 录屏」\n③ 切到 JJ象棋再切回来，等 2 秒"
+        }
+        if lastImage == nil {
+            return "收到帧了但画面解析失败，重开录屏试试。"
+        }
+        return nil
+    }
+
     // MARK: - 帧处理
 
     private func handle(_ frame: FrameServer.Frame) {
-        frameCount = FrameServer.shared.frameCount
+        receivedFrames = FrameServer.shared.frameCount
         frameSize = CGSize(width: frame.width, height: frame.height)
+        lastFrameAt = Date()
 
-        // 校准界面需要看到画面
-        if lastImage == nil || frameCount % 3 == 0 {
+        // 校准界面需要看到画面，每 2 帧刷新一次省内存
+        if lastImage == nil || receivedFrames % 2 == 0 {
             lastImage = Self.image(from: frame)
         }
 
@@ -97,7 +153,7 @@ final class AppModel: ObservableObject {
             if let info = JJEngine.shared.learnBoard(pixels: frame.data,
                                                      width: frame.width,
                                                      height: frame.height),
-               (info["templateCount"] as? Int ?? 0) > 0 {
+               JJEngine.int(info, "templateCount") > 0 {
                 learned = true
                 UserDefaults.standard.set(true, forKey: learnedKey)
                 status = "棋盘学习完成，点「③ 打开画中画」"
@@ -116,7 +172,6 @@ final class AppModel: ObservableObject {
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             self.busy = false
             guard let res else { return }
-
             DispatchQueue.main.async {
                 self.consume(res, cost: cost)
             }
@@ -124,31 +179,28 @@ final class AppModel: ObservableObject {
     }
 
     private func consume(_ res: [String: Any], cost: Int) {
-        if let fail = res["detectFail"] as? Bool, fail {
-            let d = res["detectDiff"] as? Int ?? 0
-            status = "识别偏差 \(d) 格，建议重新标定"
+        if JJEngine.bool(res, "detectFail") {
+            status = "识别偏差 \(JJEngine.int(res, "detectDiff")) 格，建议重新标定"
             return
         }
-        fen = res["fen"] as? String ?? fen
-        moveText = res["suggestChinese"] as? String ?? ""
-        scoreText = res["scoreText"] as? String ?? ""
-        winrate = res["winrate"] as? Double ?? 50
-        depth = res["depth"] as? Int ?? 0
-        fromSq = res["from"] as? Int ?? -1
-        toSq = res["to"] as? Int ?? -1
+        fen = JJEngine.str(res, "fen", fen)
+        moveText = JJEngine.str(res, "suggestChinese")
+        scoreText = JJEngine.str(res, "scoreText")
+        winrate = JJEngine.double(res, "winrate", 50)
+        depth = JJEngine.int(res, "depth")
+        fromSq = JJEngine.int(res, "from", -1)
+        toSq = JJEngine.int(res, "to", -1)
 
-        let side = (res["sideToMove"] as? String) == "red" ? "红方" : "黑方"
-        detail = "\(side)走 · 深度 \(depth) · \(cost)ms · 帧 \(frameCount)"
+        let side = JJEngine.str(res, "sideToMove") == "red" ? "红方" : "黑方"
+        detail = "\(side)走 · 深度 \(depth) · \(cost)ms · 帧 \(receivedFrames) · 保活 \(AudioKeepAlive.shared.isRunning ? "开" : "关")"
 
-        if (res["moveDetected"] as? Bool) == true {
-            let m = res["moveChinese"] as? String ?? res["move"] as? String ?? ""
-            status = "对方走了 \(m)"
+        if JJEngine.bool(res, "moveDetected") {
+            status = "对方走了 \(JJEngine.str(res, "moveChinese", JJEngine.str(res, "move")))"
         }
 
         if pipActive {
             PiPController.shared.update(fen: fen, moveText: moveText, scoreText: scoreText,
-                                        winrate: winrate, depth: depth,
-                                        from: fromSq, to: toSq)
+                                        winrate: winrate, depth: depth, from: fromSq, to: toSq)
         }
     }
 
