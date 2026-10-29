@@ -1062,7 +1062,8 @@ class BoardRecognizer {
    * 现在 patch 按 16×16 网格逐格采样，一个不漏；
    * 统计特征也从同一批采样点累计，口径一致。
    */
-  sampleCell(pixels, w, h, cx, cy, radius, wantPatch) {
+  sampleCell(pixels, w, h, cx, cy, radius, wantPatch, gain) {
+    const g = (typeof gain === 'number' && gain > 0) ? gain : 1;
     let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0, skipped = 0;
     let ink = 0, redInk = 0, darkInk = 0;
     let coreN = 0, coreInk = 0, coreRedInk = 0, coreDarkInk = 0;
@@ -1088,7 +1089,12 @@ class BoardRecognizer {
           const sy = Math.round(cy - radius + (py + 0.5) * stepPx);
           if (sx < 1 || sy < 1 || sx >= w - 1 || sy >= h - 1) continue;
           const i = (sy * w + sx) * 4;
-          const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          var R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          if (g !== 1) {
+            R = R * g > 255 ? 255 : (R * g) | 0;
+            G = G * g > 255 ? 255 : (G * g) | 0;
+            B = B * g > 255 ? 255 : (B * g) | 0;
+          }
 
           const idx = py * PW + px;
           const du = (px - halfP) / halfP, dv = (py - halfP) / halfP;
@@ -1149,7 +1155,12 @@ class BoardRecognizer {
           const y = Math.round(cy + dy);
           if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
           const i = (y * w + x) * 4;
-          const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          var R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+          if (g !== 1) {
+            R = R * g > 255 ? 255 : (R * g) | 0;
+            G = G * g > 255 ? 255 : (G * g) | 0;
+            B = B * g > 255 ? 255 : (B * g) | 0;
+          }
           if (isPureGreen(R, G, B)) { skipped++; continue; }
           if (R > 200 && G > 200 && B > 200) { skipped++; continue; }
           const L = 0.299 * R + 0.587 * G + 0.114 * B;
@@ -1193,16 +1204,57 @@ class BoardRecognizer {
     };
   }
 
+  /**
+   * 估计这一帧的亮度增益，把真机抓屏拉到模板的水平。
+   *
+   * 参考值 150：真实截图（模板来源）里棋盘区域的整体亮度约 150。
+   * 增益夹在 0.55 ~ 1.9 之间，避免在极端画面上放大噪声。
+   * 用棋盘内 90 个格点周围的稀疏采样来算，开销很小。
+   */
+  estimateGain(pixels, w, h, pts) {
+    let sum = 0, n = 0;
+    const step = 3;
+    for (let sq = 0; sq < 90; sq++) {
+      const cx = pts[sq * 2], cy = pts[sq * 2 + 1];
+      for (let dy = -7; dy <= 7; dy += step) {
+        const y = Math.round(cy + dy);
+        if (y < 1 || y >= h - 1) continue;
+        for (let dx = -7; dx <= 7; dx += step) {
+          const x = Math.round(cx + dx);
+          if (x < 1 || x >= w - 1) continue;
+          const i = (y * w + x) * 4;
+          sum += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+          n++;
+        }
+      }
+    }
+    if (n < 50) return 1;
+    const meanL = sum / n;
+    if (!(meanL > 20)) return 1;
+    let g = 150 / meanL;
+    if (g < 0.55) g = 0.55;
+    if (g > 1.9) g = 1.9;
+    return g;
+  }
+
   /** 全盘采样，返回 90 个特征 */
   sampleAll(pixels, w, h, wantPatch) {
     const pts = this.gridPoints();
     const cell = this.cellSize(pts);
     const radius = Math.max(3, Math.round(cell * this.cellRadiusRatio));
+
+    // ★ 按帧自适应亮度
+    //   模板是从「真实截图」生成的，而真机抓屏（ReplayKit 的 YUV→RGB）出来的
+    //   亮度/对比常常和截图不一样。所有颜色判据（暖色、红字、墨迹）都是绝对阈值，
+    //   整体偏亮偏暗就会把这些阈值全推歪 —— 表现就是「位置对、字和颜色全错」。
+    //   这里先用整帧统计出一个增益，把这一帧拉到模板的水平再判。
+    const gain = this.estimateGain(pixels, w, h, pts);
+
     const out = new Array(90);
     for (let sq = 0; sq < 90; sq++) {
-      out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch);
+      out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch, gain);
     }
-    this.lastStats = { pts, cell, radius };
+    this.lastStats = { pts, cell, radius, gain };
     // 顺便记下自己画中画的位置：既能用来跳过被遮挡的交叉点，
     // 也能让 App 端提醒用户「浮窗挡住棋盘了，拖走」。
     this.pipRect = findPipRect(pixels, w, h);
