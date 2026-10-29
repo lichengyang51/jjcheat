@@ -348,10 +348,14 @@ final class AppModel: ObservableObject {
         processQueue.async { [weak self] in
             guard let self else { return }
             let t0 = Date()
+            // 思考时长：这是唯一动过的「速度」参数。
+            //   局面更新需要「连续 2 帧识别结果一致」，而每帧都要先算完棋才会处理下一帧，
+            //   所以这个值直接决定了落子后要等多久：1800ms 时要等 3~4 秒，700ms 时 1.5 秒左右。
+            //   深度从 9 降到 7，对象棋着法质量影响很小，换来的响应快一倍多。
             let res = JJEngine.shared.process(pixels: frame.data,
                                              width: frame.width,
                                              height: frame.height,
-                                             timeMs: 1800)
+                                             timeMs: 700)
             let cost = Int(Date().timeIntervalSince(t0) * 1000)
             self.busy = false
             guard let res else { return }

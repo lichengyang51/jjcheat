@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-29T14:37:49.161Z
+ *  生成时间: 2026-10-29T14:46:15.888Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2249,7 +2249,7 @@ function refineByPieces(pixels, w, h, corners) {
     const ratio = cw / ch;
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
-    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
     if (r.hits < 6) return;
     if (r.usable < 40) return;
     const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
@@ -2273,7 +2273,7 @@ function refineByPieces(pixels, w, h, corners) {
   {
     const sd = seeds[0];
     const rr = Math.min(sd.cw, sd.ch) * 0.30;
-    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, null);
+    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, skipRect);
     // 只有「浮窗真的压到棋盘」时才锁先验。
     // 没遮挡的画面里完整搜索更准（能吃到 0.1% 的格距差异）；
     // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
@@ -2292,7 +2292,7 @@ function refineByPieces(pixels, w, h, corners) {
             for (let b = -1; b <= 1; b++) {
               const x0 = sd.x0 + a * oS * sd.cw;
               const y0 = sd.y0 + b * oS * sd.ch;
-              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
+              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
               if (r.usable < 40) continue;
               // 只有明显更好（多命中 2 个以上）才离开先验
               if (r.hits >= pick.hits + 2) {
@@ -3106,12 +3106,28 @@ class BoardRecognizer {
       const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
       const warmR = (typeof s.warmR === 'number') ? s.warmR : 0;
 
-      // 【遮挡判定已彻底移除】
-      //   曾经写过「自己的画中画盖住棋盘就把那几格判成未知」的逻辑，
-      //   但画中画矩形是靠颜色猜的，界面上其它米黄区域会让它跑偏，
-      //   于是没挡住也报警、还把那几格真棋子抹掉，整盘直接崩。
-      //   画中画会占掉棋盘格子这件事，已经从根上解决（浮窗改成横版 320x180，
-      //   系统无论摆右上还是右下都不会碰到棋盘），所以这段判据没有存在的必要。
+      // ★ 被自己的画中画盖住的格子
+      //   抓屏会把画中画窗口一起抓进去（实测 PiP 压住右上角时，
+      //   那几个格子的暖色占比是 100%、墨迹 0% —— 那是浮窗里的米黄棋盘）。
+      //   这种格子完全没有棋子的信息，必须判「未知」而不是硬判成棋子，
+      //   否则会凭空造出七八个卒，把整盘 FEN 搞成垃圾。
+      const pr = this.pipRect;
+      let inPip = false;
+      if (pr) {
+        const lc = this.lastStats;
+        if (lc && lc.pts) {
+          const px = lc.pts[sq * 2], py = lc.pts[sq * 2 + 1], pad = lc.cell * 0.35;
+          inPip = (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad);
+        }
+      }
+      if (inPip || (warmR > 0.93 && inkR < 0.06)) {
+        grid[sq] = EMPTY;
+        codes[sq] = 0;
+        conf[sq] = 0;
+        hidden[sq] = 1;
+        hiddenCount++;
+        continue;
+      }
 
       const hasInk = (inkR >= inkTh);
       const hasFace = (warmR >= 0.28);
@@ -3720,10 +3736,6 @@ var JJEngine = {
     session.gridStable = 0;
     // 逐格「上一稳定值」也清掉，否则换局后残留上一局的棋子
     session.stableCodes = null;
-    session.lastBoardFen = '';
-    session.searchKey = '';
-    session.searchLevel = 0;
-    session.lastBudget = 0;
     session.lowStreak = null;
     session.lowConfCount = 0;
     return session.tracker.fen;
@@ -4045,10 +4057,11 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 遮挡提示已彻底移除：判定靠颜色猜浮窗位置，会误报、还会把正常格子抹成空。
-      // 字段保留为 0，App 端不会再显示任何「浮窗挡住棋盘」的提示，也不会因此冻结局面。
-      pipOverlap: 0,
-      hiddenCells: 0
+      // 自己的画中画是否真的盖住了棋盘的格子。
+      // 直接用「被判为未知的格子数」当证据 —— 几何外接框会被界面里其它米黄区域
+      // 误判（实测没挡也报警），而格子被盖住是直接观测到的事实。
+      pipOverlap: ((cls.hiddenCount || 0) >= 2) ? 1 : 0,
+      hiddenCells: (cls.hiddenCount || 0)
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN
@@ -4060,21 +4073,33 @@ var JJEngine = {
     //   FEN 每帧都不一样，着法就会乱跳（实测同一开局给出过相三进五/兵四进一/兵三进一三个答案）。
     var directFen = null;
     var codesOk = false;
+    var codesHash = 0;
+    if (cls.codes) {
+      for (var ci = 0; ci < 90; ci++) {
+        codesHash = ((codesHash * 31) + cls.codes[ci]) | 0;
+      }
+    }
+    if (session.lastCodesHash === codesHash) {
+      session.codesStable = (session.codesStable || 0) + 1;
+    } else {
+      session.codesStable = 0;
+      session.lastCodesHash = codesHash;
+    }
+    // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
+    // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
+    var codesSettled = (session.codesStable >= 2);
 
-    // 【重要】这里原来要求「连续 3 帧识别结果完全一致」才更新局面。
-    //   这个门槛在真机上会造成死锁：
-    //   一次搜索要 0.2~1.2 秒，期间新帧全被丢掉，所以两次「真正被处理」的帧
-    //   相隔一秒多、中间跳过十几帧。只要棋局有任何变化，计数就被清零，
-    //   「连续 3 帧」永远凑不齐 —— 于是局面一次都不更新，
-    //   浮窗永远停在最早 latch 到的那一帧（很可能是个垃圾盘面）。
-    //   抖动问题已经由「逐格置信度 + 保留上一稳定值」和 350ms 限流挡住了，
-    //   这道门槛只剩坏处，所以整个去掉。
-    if (cls.codes && codesUsable(cls.codes)) {
+    // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
+    //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
+    //   （几个高亮格来回翻），永远凑不出 3 帧一致，浮窗就一直是开局的棋盘。
+    //   现在：第一次落地无条件（限流照旧），之后才要求稳定，抖动照样挡得住。
+    var firstLatch = !session.lastBoardFen;
+    if ((firstLatch || codesSettled) && cls.codes && codesUsable(cls.codes)) {
       var boardFen = codesToBoardFen(cls.codes);
-      // 局面更新限流：最多每 350ms 换一次。（原来 700ms，落子后光这道闸就要多等半秒）
+      // 局面更新限流：最多每 700ms 换一次。
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
       var nowMs = Date.now();
-      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 350);
+      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
 
       if (boardFen !== session.lastBoardFen && canUpdate) {
         session.lastBoardFen = boardFen;
@@ -4116,36 +4141,15 @@ var JJEngine = {
       }
     }
     out.codesValid = codesOk ? 1 : 0;
-    out.codesSettled = 1;   // 门槛已去掉，有结果就算可用
+    out.codesSettled = codesSettled ? 1 : 0;
 
     // 2) 到了我方走 → 算棋
-    //
-    // ★ 渐进加深（解决「落子后要等好几秒」）
-    //   原来是局面一变就一次跑满 1800ms，用户落子后要等将近两秒才看到着法。
-    //   现在同一个局面按 220 → 550 → 1200ms 三档依次加深：
-    //   第 1 帧就把浅一档的着法端出去（一般 0.3 秒内），
-    //   后续帧（局面没变）自动加深，浮窗上的着法会从「浅版」平滑换成「深版」。
-    //   局面一变就回到第 0 档，保证「刚走完立刻有回话」。
-    var LEVELS = [220, 550, 1200];
     var analyzeFen = directFen || session.tracker.fen;
-    var maxBudget = opts.timeMs || 1800;
-    if (session.searchKey !== analyzeFen) {
-      session.searchKey = analyzeFen;
-      session.searchLevel = 0;
-    }
-    var lvl = session.searchLevel || 0;
-    var budget = Math.min(maxBudget, LEVELS[Math.min(lvl, LEVELS.length - 1)]);
-    var needSearch = out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen;
-    // 局面没变但还没跑满三档 → 继续加深
-    if (!needSearch && budget > (session.lastBudget || 0)) needSearch = true;
-
-    if (needSearch) {
+    if (out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen) {
       var t0 = Date.now();
-      var res = ENG.analyze(analyzeFen, { timeMs: budget });
+      var res = ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
       var pos = new POS.Position(analyzeFen);
       var mv = C.ucciToMv(res.bestmove);
-      session.searchLevel = lvl + 1;
-      session.lastBudget = budget;
 
       // 完整缓存：中文着法、起止格、分值、胜率、深度、走子方
       // 否则下一帧走缓存分支时，着法就丢了，浮窗会退回「识别中…」

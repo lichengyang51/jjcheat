@@ -669,7 +669,7 @@ function refineByPieces(pixels, w, h, corners) {
     const ratio = cw / ch;
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
-    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
+    const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
     if (r.hits < 6) return;
     if (r.usable < 40) return;
     const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
@@ -693,7 +693,7 @@ function refineByPieces(pixels, w, h, corners) {
   {
     const sd = seeds[0];
     const rr = Math.min(sd.cw, sd.ch) * 0.30;
-    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, null);
+    const base = gridAlignScore(integ, iw, w, h, sd.x0, sd.cw, sd.y0, sd.ch, rr, skipRect);
     // 只有「浮窗真的压到棋盘」时才锁先验。
     // 没遮挡的画面里完整搜索更准（能吃到 0.1% 的格距差异）；
     // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
@@ -712,7 +712,7 @@ function refineByPieces(pixels, w, h, corners) {
             for (let b = -1; b <= 1; b++) {
               const x0 = sd.x0 + a * oS * sd.cw;
               const y0 = sd.y0 + b * oS * sd.ch;
-              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
+              const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, skipRect);
               if (r.usable < 40) continue;
               // 只有明显更好（多命中 2 个以上）才离开先验
               if (r.hits >= pick.hits + 2) {
@@ -1526,12 +1526,28 @@ class BoardRecognizer {
       const inkR = (typeof s.inkR === 'number') ? s.inkR : 0;
       const warmR = (typeof s.warmR === 'number') ? s.warmR : 0;
 
-      // 【遮挡判定已彻底移除】
-      //   曾经写过「自己的画中画盖住棋盘就把那几格判成未知」的逻辑，
-      //   但画中画矩形是靠颜色猜的，界面上其它米黄区域会让它跑偏，
-      //   于是没挡住也报警、还把那几格真棋子抹掉，整盘直接崩。
-      //   画中画会占掉棋盘格子这件事，已经从根上解决（浮窗改成横版 320x180，
-      //   系统无论摆右上还是右下都不会碰到棋盘），所以这段判据没有存在的必要。
+      // ★ 被自己的画中画盖住的格子
+      //   抓屏会把画中画窗口一起抓进去（实测 PiP 压住右上角时，
+      //   那几个格子的暖色占比是 100%、墨迹 0% —— 那是浮窗里的米黄棋盘）。
+      //   这种格子完全没有棋子的信息，必须判「未知」而不是硬判成棋子，
+      //   否则会凭空造出七八个卒，把整盘 FEN 搞成垃圾。
+      const pr = this.pipRect;
+      let inPip = false;
+      if (pr) {
+        const lc = this.lastStats;
+        if (lc && lc.pts) {
+          const px = lc.pts[sq * 2], py = lc.pts[sq * 2 + 1], pad = lc.cell * 0.35;
+          inPip = (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad);
+        }
+      }
+      if (inPip || (warmR > 0.93 && inkR < 0.06)) {
+        grid[sq] = EMPTY;
+        codes[sq] = 0;
+        conf[sq] = 0;
+        hidden[sq] = 1;
+        hiddenCount++;
+        continue;
+      }
 
       const hasInk = (inkR >= inkTh);
       const hasFace = (warmR >= 0.28);
