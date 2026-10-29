@@ -31,10 +31,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
     private var convertedCount: UInt64 = 0
     private var failedCount: UInt64 = 0
 
-    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 10fps）
-    ///   原来 10（6fps）：落子后最坏要等 167ms 才有一帧，再叠加稳定判定就是半秒。
-    ///   441x958 的转换和回环传输都很便宜，提到 10fps 把「发现落子」压到 100ms 以内。
-    private let stride: UInt64 = 6
+    /// 抽帧步长：每 N 帧发一次（录屏 60fps → 发 6fps）
+    ///   这里是回退过的值：试过改成 6（10fps）之后，浮窗里出现「位置对、字和颜色全错」
+    ///   的现象 —— 抽帧变密会让回环链路上更容易出现整帧数据错位/丢字节，
+    ///   一帧坏掉整盘认错。识别和搜索的加速都在引擎里，跟这里无关，所以恢复 10。
+    private let stride: UInt64 = 10
     /// 心跳间隔
     private let heartbeatEvery: UInt64 = 5
     /// 降采样倍数：ReplayKit 给的是 882×1917，降 2 倍得 441×958。
