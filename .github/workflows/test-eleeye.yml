@@ -1,0 +1,43 @@
+name: test-eleeye
+
+# 临时的调试流水线：在 macOS 上把象眼编出来、直接跑一遍，
+# 把引擎原始输出打出来 —— 用来定位「象眼不可用 rc=-2」（拿不到 bestmove）的原因。
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/native/eetest.cpp'
+      - '.github/workflows/test-eleeye.yml'
+
+jobs:
+  t:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取象眼源码并转码
+        run: |
+          git clone --depth 1 https://github.com/xqbase/eleeye.git /tmp/eleeye
+          find /tmp/eleeye -name '*.cpp' -o -name '*.h' | while read f; do
+            iconv -f GBK -t UTF-8 "$f" > "$f.u8" 2>/dev/null && mv "$f.u8" "$f" || rm -f "$f.u8"
+          done
+          ls /tmp/eleeye/eleeye | head
+
+      - name: 编测试程序（macOS 本机跑）
+        run: |
+          cd /tmp/eleeye/eleeye
+          clang++ -std=c++11 -O2 -DNDEBUG -I. -I../base \
+            $GITHUB_WORKSPACE/ios/native/eetest.cpp \
+            position.cpp pregen.cpp search.cpp hash.cpp evaluate.cpp \
+            genmoves.cpp movesort.cpp preeval.cpp book.cpp ucci.cpp pipe.cpp ../base/pipe.cpp \
+            -o /tmp/eetest
+          ls -la /tmp/eetest
+
+      - name: 跑开局
+        run: |
+          /tmp/eetest "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1" || true
+
+      - name: 跑中局
+        run: |
+          /tmp/eetest "2r1kabnC/1R1Pa2c1/3Nb1r2/3N5/4c4/9/9/5n3/4p4/3K5 w - - 0 1" || true
