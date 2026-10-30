@@ -1,8 +1,8 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T06:27:25.997Z
- *  模块数: 8
+ *  生成时间: 2026-10-30T07:30:23.841Z
+ *  模块数: 9
  * ============================================================ */
 (function (global) {
 'use strict';
@@ -1429,7 +1429,10 @@ function scoreToWinrate(cpRed, sideToMove) {
   return 1 / (1 + Math.pow(10, -v / 400));
 }
 
+let BOOK = null;
+function setBook(b) { BOOK = b; }
 let _shared = null;
+let _probe = null;
 /** 单例分析入口，方便 iOS JSC 里反复调用 */
 /**
  * 多候选着法 —— 给界面上的「思考列表」用
@@ -1450,8 +1453,27 @@ function analyzeTop(fen, opts) {
   const quickDepth = Math.max(4, Math.min(10, o.depth || 7));
 
   const pos = new Position(fen);
+
+  // 0) 开局库：命中就直接给库着，不烧算力、也不会抖
+  if (BOOK) {
+    const hit = BOOK.lookup(fen);
+    if (hit) {
+      const mv = C.ucciToMv(hit.ucci);
+      const zh = NOTE.mvToChinese(pos.board, mv, pos.side);
+      return {
+        bestmove: hit.ucci,
+        score: 0,
+        depth: 0,
+        nodes: 0,
+        ms: 0,
+        book: 1,
+        rows: [{ move: hit.ucci, chinese: zh, score: 0, winrate: 0.5, depth: 0 }]
+      };
+    }
+  }
+
   // 1) 先跑一次正常搜索，最佳着法和它的分数最准
-  const best = _shared.search(new Position(fen), Math.max(150, Math.floor(timeMs * 0.35)));
+  const best = _shared.search(new Position(fen), Math.max(150, Math.floor(timeMs * 0.55)));
 
   const rows = [];
   const seen = {};
@@ -1471,8 +1493,12 @@ function analyzeTop(fen, opts) {
   }
 
   // 2) 每个根着法各评估一次（时间平均分配）
-  const budget = Math.max(30, Math.floor((timeMs * 0.65) / Math.max(1, Math.min(roots.length, want * 2))));
-  const probe = new Searcher();
+  const budget = Math.max(30, Math.floor((timeMs * 0.45) / Math.max(1, Math.min(roots.length, want * 2))));
+  // ★ 复用同一个 probe：Searcher 里有置换表、杀手着法、历史启发。
+  //   每帧 new 一个等于每次从零开始 —— 这就是浮窗上「深度 5 → 7 → 5」来回跳、
+  //   同分的两个着法来回换的根源（评分每次都是重新抖出来的）。
+  if (!_probe) _probe = new Searcher();
+  const probe = _probe;
   let nodes = best.nodes || 0;
 
   for (let i = 0; i < roots.length && rows.length < want * 2; i++) {
@@ -1521,9 +1547,88 @@ function analyze(fen, opts) {
 }
 
 module.exports = {
-  Searcher, analyze, analyzeTop, scoreToWinrate,
+  Searcher, analyze, analyzeTop, scoreToWinrate, setBook,
   MATE, MATE_BOUND, INF
 };
+
+};
+
+/* ---- cst/book ---- */
+__modules["cst/book"] = function (module, exports, require) {
+'use strict';
+/*
+ * book.js —— 内置开局库
+ *
+ * 跟鹏飞那个「库: 兵七进一」是一个意思：开局阶段照着谱走，
+ * 既不用烧算力，也不会出现「两个同分着法来回跳」。
+ *
+ * 库就是一个「局面 → 下一手」的查表：
+ *   key = FEN 的「棋盘 + 走子方」两段（去掉回合数，方便匹配）
+ *   value = 下一手的 UCCI
+ *
+ * 主线用 UCCI 写，加载时逐手校验合法性 —— 写错的那一手之后整条线丢掉，
+ * 绝不会把非法的库着喂给界面。
+ */
+
+var C = require('./constants');
+var POS = require('./position');
+
+// 每条线都是「红先」交替。红方在下（标准 FEN，row0=黑底线）。
+var LINES = [
+  // 中炮对屏风马（最常见）
+  ['h7e7', 'h0g2', 'h9g7', 'i0h0', 'i9h9', 'g3g4', 'c6c5'],
+  // 中炮对反宫马
+  ['h7e7', 'h0g2', 'h9g7', 'c0e2', 'i9h9', 'c3c4'],
+  // 中炮对单提马
+  ['h7e7', 'h0g2', 'h9g7', 'b9c7', 'i9h9'],
+  // 仙人指路
+  ['c6c5', 'c3c4', 'h9g7', 'h0g2', 'i9h9', 'i0h0'],
+  // 飞相局
+  ['g9e7', 'h0g2', 'h9g7', 'i0h0', 'i9h9'],
+  // 起马局
+  ['h9g7', 'g3g4', 'i9h9', 'i0h0', 'h7e7'],
+  // 过宫炮
+  ['h7f7', 'h0g2', 'h9g7', 'i0h0', 'i9h9'],
+  // 中炮直车对屏风马（红先车一平二再马二进三）
+  ['h7e7', 'h0g2', 'i9h9', 'i0h0', 'h9g7', 'g3g4']
+];
+
+var MAP = null;
+
+function keyOf(fen) {
+  var parts = String(fen).split(' ');
+  return parts[0] + ' ' + (parts[1] || 'w');
+}
+
+function build() {
+  MAP = {};
+  var total = 0;
+  for (var li = 0; li < LINES.length; li++) {
+    var line = LINES[li];
+    var pos = new POS.Position(C.START_FEN);
+    for (var k = 0; k < line.length; k++) {
+      var key = keyOf(pos.getFen());
+      var mv = C.ucciToMv(line[k]);
+      if (!mv) break;
+      var cap = pos.makeMove(mv);
+      if (cap === false || cap === undefined) break;   // 这一手不合法 → 整条线到此为止
+      if (!MAP[key]) { MAP[key] = { ucci: line[k] }; total++; }
+    }
+  }
+  return total;
+}
+
+function ensure() {
+  if (!MAP) build();
+}
+
+/** @returns {{ucci:string}|null} */
+function lookup(fen) {
+  ensure();
+  return MAP[keyOf(fen)] || null;
+}
+
+module.exports = { lookup: lookup, build: build, count: function () { ensure(); var n = 0; for (var k in MAP) n++; return n; } };
 
 };
 
@@ -3971,6 +4076,9 @@ var C = __require('cst/constants');
 var POS = __require('cst/position');
 var NOTE = __require('cst/notation');
 var ENG = __require('cst/search');
+var BOOK = __require('cst/book');
+// 把开局库装进搜索器：命中库就照谱走（跟鹏飞「库:」一样）
+ENG.setBook && ENG.setBook(BOOK);
 var REC = __require('vision/recognizer');
 var TRK = __require('vision/tracker');
 
@@ -4467,6 +4575,13 @@ var JJEngine = {
     // 做法：分数够高的格子直接采信；分数太低的格子沿用上一帧的稳定值，
     // 连续多帧都低才认这一次的结果（避免被一个动画帧永久带偏）。
     var LOWCONF = 0.55;
+    // 实时模式（录屏 + 浮窗）：本帧结果直接采信。
+    //
+    //   为什么要单独一条：稳定值机制本来是为了挡落子动画的一两帧干扰，
+    //   但实时模式下棋盘会一直停在「对方刚走完」的状态里 ——
+    //   那几格刚好因为放大/高亮圈分数偏低，就一直沿用旧值，
+    //   表现就是「对方走了，浮窗里没变」。所以在实时模式下不搞保留。
+    var liveMode = !!(opts && opts.live);
     var prevCodes = session.stableCodes;
     var mergedCodes = new Array(90);
     var lowConfCount = 0;
@@ -4486,6 +4601,7 @@ var JJEngine = {
       }
       var raw = cls.codes ? cls.codes[sm] : 0;
       var conf = cls.conf ? (cls.conf[sm] || 0) : 1;
+      if (liveMode) { mergedCodes[sm] = raw; continue; }
       var st = stats[sm];
       var warm = st ? (st.warmR || 0) : 0;
       var okCell;
@@ -4632,7 +4748,7 @@ var JJEngine = {
     }
     // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
-    var codesSettled = (session.codesStable >= 2);
+    var codesSettled = liveMode ? true : (session.codesStable >= 2);
 
     // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
     //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
@@ -4733,7 +4849,11 @@ var JJEngine = {
     var analyzeFen = directFen || session.tracker.fen;
     if (out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen) {
       var t0 = Date.now();
-      var res = ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
+      // 开局库：命中就照谱走，一眼出着、也不算棋（跟鹏飞「库:」一样）
+      var bookHit = BOOK.lookup(analyzeFen);
+      var res = bookHit
+        ? { bestmove: bookHit.ucci, score: 0, winrate: 0.5, depth: 0, nodes: 0, pv: [bookHit.ucci] }
+        : ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
       var pos = new POS.Position(analyzeFen);
       var mv = C.ucciToMv(res.bestmove);
 
@@ -4752,7 +4872,8 @@ var JJEngine = {
         pv: res.pv,
         nodes: res.nodes,
         mate: res.mate,
-        sideToMove: pos.side === C.RED ? 'red' : 'black'
+        sideToMove: pos.side === C.RED ? 'red' : 'black',
+        book: bookHit ? 1 : 0
       };
 
       var c = session.lastResult;

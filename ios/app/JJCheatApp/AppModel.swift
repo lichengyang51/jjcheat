@@ -75,6 +75,8 @@ final class AppModel: ObservableObject {
     @Published var thinkSeconds: Double = 3.0
     /// 画中画浮窗是否开着
     @Published var pipActive = false
+    /// 这一手是不是来自开局库（浮窗要显示「库: X」，跟鹏飞一样）
+    @Published var isBookMove = false
     /// 当前局面分数（数值，浮窗要显示「分数: N」）
     @Published var scoreValue: Int = 0
     /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
@@ -294,6 +296,7 @@ final class AppModel: ObservableObject {
                 }
                 self.winratePct = JJEngine.double(res, "winrate", 50)
                 self.scoreValue = sc
+                self.isBookMove = JJEngine.int(res, "book", 0) == 1
 
                 var list: [CandidateRow] = []
                 if let raw = res?["rows"] as? [[String: Any]] {
@@ -307,8 +310,24 @@ final class AppModel: ObservableObject {
                         ))
                     }
                 }
-                self.rows = list
-                if let first = list.first {
+                // ★ 滞回：只在「明显更好」时换着法
+                //
+                //   浮窗一直在跑浅搜（0.3~0.5 秒），两个同分着法的排序会来回翻，
+                //   看着就是「一会儿叫你走这个、一会儿叫你走那个」。
+                //   现在：新着法必须比当前显示的那一手高出 30 分以上才换；
+                //   在 30 分以内就保持原来那一手（把它挪到列表最前）。
+                var ordered = list
+                if let keep = self.bestChinese.isEmpty ? nil : self.bestChinese,
+                   let keepIdx = list.firstIndex(where: { $0.chinese == keep }),
+                   let bestScore = list.first?.score {
+                    let keepScore = list[keepIdx].score
+                    if list.first?.chinese != keep && (bestScore - keepScore) < 30 {
+                        ordered = [list[keepIdx]] + list.enumerated()
+                            .filter { $0.offset != keepIdx }.map { $0.element }
+                    }
+                }
+                self.rows = ordered
+                if let first = ordered.first {
                     self.bestChinese = first.chinese
                     self.fromSq = Self.sqOf(first.move, 0)
                     self.toSq = Self.sqOf(first.move, 1)
@@ -407,9 +426,9 @@ final class AppModel: ObservableObject {
         // 这些必须真的搜一次才有 —— process 只给一个着法。
         // 1.2 秒最多搜一次，不然每帧都搜会把识别挤掉。
         let now = Date()
-        if now.timeIntervalSince(lastLiveAnalyze) > 1.2 {
+        if now.timeIntervalSince(lastLiveAnalyze) > 1.8 {
             lastLiveAnalyze = now
-            compute(limitSeconds: 0.8)
+            compute(limitSeconds: 1.6)
         }
         _ = rawFen
         refreshPanel()
@@ -466,7 +485,8 @@ final class AppModel: ObservableObject {
             secs: elapsed,
             score: scoreValue,
             moves: mv,
-            hint: hint
+            hint: hint,
+            isBook: isBookMove
         )
     }
 

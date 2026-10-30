@@ -438,7 +438,10 @@ function scoreToWinrate(cpRed, sideToMove) {
   return 1 / (1 + Math.pow(10, -v / 400));
 }
 
+let BOOK = null;
+function setBook(b) { BOOK = b; }
 let _shared = null;
+let _probe = null;
 /** 单例分析入口，方便 iOS JSC 里反复调用 */
 /**
  * 多候选着法 —— 给界面上的「思考列表」用
@@ -459,8 +462,27 @@ function analyzeTop(fen, opts) {
   const quickDepth = Math.max(4, Math.min(10, o.depth || 7));
 
   const pos = new Position(fen);
+
+  // 0) 开局库：命中就直接给库着，不烧算力、也不会抖
+  if (BOOK) {
+    const hit = BOOK.lookup(fen);
+    if (hit) {
+      const mv = C.ucciToMv(hit.ucci);
+      const zh = NOTE.mvToChinese(pos.board, mv, pos.side);
+      return {
+        bestmove: hit.ucci,
+        score: 0,
+        depth: 0,
+        nodes: 0,
+        ms: 0,
+        book: 1,
+        rows: [{ move: hit.ucci, chinese: zh, score: 0, winrate: 0.5, depth: 0 }]
+      };
+    }
+  }
+
   // 1) 先跑一次正常搜索，最佳着法和它的分数最准
-  const best = _shared.search(new Position(fen), Math.max(150, Math.floor(timeMs * 0.35)));
+  const best = _shared.search(new Position(fen), Math.max(150, Math.floor(timeMs * 0.55)));
 
   const rows = [];
   const seen = {};
@@ -480,8 +502,12 @@ function analyzeTop(fen, opts) {
   }
 
   // 2) 每个根着法各评估一次（时间平均分配）
-  const budget = Math.max(30, Math.floor((timeMs * 0.65) / Math.max(1, Math.min(roots.length, want * 2))));
-  const probe = new Searcher();
+  const budget = Math.max(30, Math.floor((timeMs * 0.45) / Math.max(1, Math.min(roots.length, want * 2))));
+  // ★ 复用同一个 probe：Searcher 里有置换表、杀手着法、历史启发。
+  //   每帧 new 一个等于每次从零开始 —— 这就是浮窗上「深度 5 → 7 → 5」来回跳、
+  //   同分的两个着法来回换的根源（评分每次都是重新抖出来的）。
+  if (!_probe) _probe = new Searcher();
+  const probe = _probe;
   let nodes = best.nodes || 0;
 
   for (let i = 0; i < roots.length && rows.length < want * 2; i++) {
@@ -530,6 +556,6 @@ function analyze(fen, opts) {
 }
 
 module.exports = {
-  Searcher, analyze, analyzeTop, scoreToWinrate,
+  Searcher, analyze, analyzeTop, scoreToWinrate, setBook,
   MATE, MATE_BOUND, INF
 };

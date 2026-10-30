@@ -18,6 +18,7 @@ const ENTRY_FILES = [
   'cst/notation',
   'cst/eval',
   'cst/search',
+  'cst/book',
   'vision/templates',
   'vision/recognizer',
   'vision/tracker'
@@ -105,6 +106,9 @@ var C = __require('cst/constants');
 var POS = __require('cst/position');
 var NOTE = __require('cst/notation');
 var ENG = __require('cst/search');
+var BOOK = __require('cst/book');
+// 把开局库装进搜索器：命中库就照谱走（跟鹏飞「库:」一样）
+ENG.setBook && ENG.setBook(BOOK);
 var REC = __require('vision/recognizer');
 var TRK = __require('vision/tracker');
 
@@ -875,7 +879,11 @@ var JJEngine = {
     var analyzeFen = directFen || session.tracker.fen;
     if (out.moveDetected || !session.lastResult || session.lastFen !== analyzeFen) {
       var t0 = Date.now();
-      var res = ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
+      // 开局库：命中就照谱走，一眼出着、也不算棋（跟鹏飞「库:」一样）
+      var bookHit = BOOK.lookup(analyzeFen);
+      var res = bookHit
+        ? { bestmove: bookHit.ucci, score: 0, winrate: 0.5, depth: 0, nodes: 0, pv: [bookHit.ucci] }
+        : ENG.analyze(analyzeFen, { timeMs: opts.timeMs || 800 });
       var pos = new POS.Position(analyzeFen);
       var mv = C.ucciToMv(res.bestmove);
 
@@ -894,7 +902,8 @@ var JJEngine = {
         pv: res.pv,
         nodes: res.nodes,
         mate: res.mate,
-        sideToMove: pos.side === C.RED ? 'red' : 'black'
+        sideToMove: pos.side === C.RED ? 'red' : 'black',
+        book: bookHit ? 1 : 0
       };
 
       var c = session.lastResult;
