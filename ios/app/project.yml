@@ -54,6 +54,8 @@ targets:
         UIBackgroundModes:
           - audio
         ITSAppUsesNonExemptEncryption: false
+        # 截图读盘需要读取相册里最新一张系统截图
+        NSPhotoLibraryUsageDescription: 读取你刚截的棋盘截图，用来分析当前局面并给出着法。图片只在本机处理，不会上传。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat

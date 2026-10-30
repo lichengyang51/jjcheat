@@ -61,6 +61,7 @@ struct BroadcastPickerButton: UIViewRepresentable {
 struct ContentView: View {
 
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pickerTrigger = 0
     @State private var showCalibration = false
     @State private var calibFrames: [FrameSnapshot] = []
@@ -158,6 +159,31 @@ struct ContentView: View {
                             .font(.footnote)
                             .padding(.top, 4)
                         }
+
+                        // ★ 截图读盘（和鹏飞象棋 iOS 版同一条路）
+                        //   在 JJ象棋 里截一张图，切回这里就自动出着法；
+                        //   也可以点这个按钮手动再读一次。
+                        VStack(alignment: .leading, spacing: 6) {
+                            Button {
+                                model.analyzeLatestScreenshot(manual: true)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "photo.on.rectangle.angled")
+                                    Text("读最新截图，出着法")
+                                        .fontWeight(.semibold)
+                                    Spacer()
+                                }
+                                .padding(.vertical, 12)
+                                .padding(.horizontal, 14)
+                                .background(Color.green.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                            }
+                            Text("在 JJ象棋 里截一张图 → 切回本 App 会自动读；走子仍需你自己点（苹果不允许第三方 App 代替点击）")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 8)
                     }
 
                     resultCard
@@ -185,6 +211,13 @@ struct ContentView: View {
                     showCalibration = false
                 } onCancel: {
                     showCalibration = false
+                }
+            }
+            // 从 JJ象棋 切回本 App 时，自动读最新截图并出着法
+            // （iOS 16 只能用 onChange(of:perform:)）
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    model.analyzeLatestScreenshot(manual: false)
                 }
             }
         }

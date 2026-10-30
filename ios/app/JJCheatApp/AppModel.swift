@@ -65,6 +65,9 @@ final class AppModel: ObservableObject {
 
     /// 浮窗里显示的棋盘 = 抓屏裁出来的真实画面
     @Published var boardCrop: UIImage?
+
+    /// 正在读截图（防重入）
+    private var analyzingScreenshot = false
     private var cropTick = 0
 
     private var autoCalibAttempts = 0
@@ -189,6 +192,82 @@ final class AppModel: ObservableObject {
 
     /// 最近一帧的原始数据（自动校准要用）
     private var lastRawFrame: (data: Data, width: Int, height: Int)?
+
+    // MARK: - 截图读盘（和鹏飞象棋 iOS 版同一条路）
+
+    /// 读「相册里最新一张系统截图」并给出着法。
+    ///
+    /// 为什么改成这条路：录屏（ReplayKit）拿到的是 YUV 420、色度天生半分辨率，
+    /// 再降采样后字形糊掉，兵种就会认错（黑将认成炮）。
+    /// 系统截图是原生分辨率、无损，颜色和清晰度都是最好的。
+    /// 用法：在 JJ象棋 里截一张图 → 切回本 App → 自动出着法。
+    ///
+    /// - Parameter manual: true 表示用户主动点按钮（失败时给出更明确的提示）
+    func analyzeLatestScreenshot(manual: Bool = false) {
+        if analyzingScreenshot { return }
+        analyzingScreenshot = true
+
+        ScreenshotReader.requestAuth { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.analyzingScreenshot = false
+                self.status = "需要「照片」权限：设置 → 隐私与安全性 → 照片 → JJCheat → 允许"
+                return
+            }
+            ScreenshotReader.latestScreenshot { [weak self] img, when in
+                guard let self else { return }
+                guard let img, let rgba = ScreenshotReader.rgba(from: img) else {
+                    self.analyzingScreenshot = false
+                    if manual { self.status = "相册里没找到截图。在 JJ象棋 里截一张图，再切回来" }
+                    return
+                }
+                // 截图太旧就别用，免得读上一局的盘面
+                if !manual, let when = when, Date().timeIntervalSince(when) > 300 {
+                    self.analyzingScreenshot = false
+                    return
+                }
+
+                DispatchQueue.global(qos: .userInitiated).async {
+                    // 1) 在这张截图上找棋盘（截图分辨率固定，每次重找最稳）
+                    guard let corners = JJEngine.shared.autoDetectBoard(pixels: rgba.data,
+                                                                       width: rgba.width,
+                                                                       height: rgba.height),
+                          Self.cornersSane(corners, w: rgba.width, h: rgba.height) else {
+                        DispatchQueue.main.async {
+                            self.analyzingScreenshot = false
+                            self.status = "这张截图里没找到棋盘，要让整个棋盘完整出现在画面里"
+                        }
+                        return
+                    }
+                    JJEngine.shared.setCorners(corners)
+
+                    // 2) 同一张截图连喂 3 遍 —— 识别要求「连续 2 帧一致」才算定下来，
+                    //    同一张图连喂正好满足，而且结果最稳。
+                    let t0 = Date()
+                    var res: [String: Any]?
+                    for _ in 0..<3 {
+                        res = JJEngine.shared.process(pixels: rgba.data,
+                                                      width: rgba.width,
+                                                      height: rgba.height,
+                                                      timeMs: 1500)
+                    }
+                    let cost = Int(Date().timeIntervalSince(t0) * 1000)
+                    DispatchQueue.main.async {
+                        self.analyzingScreenshot = false
+                        self.calibrated = true
+                        self.learned = true
+                        if let res {
+                            self.consume(res, cost: cost)
+                            let n = res["fen"] as? String ?? ""
+                            self.status = "已读截图 \(rgba.width)×\(rgba.height) · \(n.split(separator: " ").first.map(String.init) ?? "")"
+                        } else {
+                            self.status = "截图识别失败"
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// 自动校准：从历史帧里找一张能检测出棋盘的帧来标定
     func autoCalibrate() -> (ok: Bool, message: String) {
