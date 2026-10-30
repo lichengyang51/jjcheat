@@ -1,5 +1,5 @@
-// eetest.cpp —— 本地验证象眼为什么给不出着法
-// 逻辑和 app 里的 ee_bridge.cpp 一模一样，只是多打一些诊断信息
+// eetest.cpp —— CI/本地验证象眼为什么给不出着法
+// 逻辑和 app 里的 ee_bridge.cpp 一样，只是多打诊断（hex dump / 局面状态）
 
 #include <cstdio>
 #include <cstring>
@@ -39,7 +39,12 @@ int main(int argc, char **argv) {
     Search.pos.FromFen(fen);
     Search.pos.nDistance = 0;
     Search.pos.PreEvaluate();
-    printf("[pos] fromFen ok, side=%d\n", (int) Search.pos.sdPlayer);
+
+    printf("[pos] side=%d nMoveNum=%d nDistance=%d\n",
+           (int) Search.pos.sdPlayer, (int) Search.pos.nMoveNum, (int) Search.pos.nDistance);
+    printf("[pos] IsDraw=%d RepStatus3=%d LastCptDrw=%d\n",
+           (int) Search.pos.IsDraw(), (int) Search.pos.RepStatus(3),
+           (int) Search.pos.LastMove().CptDrw);
 
     Search.bQuit = false;
     Search.nGoMode = GO_MODE_TIMER;
@@ -65,13 +70,28 @@ int main(int argc, char **argv) {
     while ((n = fread(buf, 1, sizeof(buf), tmp)) > 0) text.append(buf, n);
     fclose(tmp);
 
-    printf("[raw] 引擎输出 %zu 字节\n", text.size());
-    printf("[raw] 前 400 字节:\n%.400s\n", text.c_str());
-    size_t pos = text.rfind("bestmove");
-    if (pos == std::string::npos) {
-        printf("[结果] 没有 bestmove → rc=-2\n");
-        return 2;
+    printf("[raw] %zu 字节, hex:\n", text.size());
+    for (size_t i = 0; i < text.size() && i < 200; i++) {
+        printf("%02X ", (unsigned char) text[i]);
+        if ((i + 1) % 16 == 0) printf("\n");
     }
-    printf("[结果] 找到: %s\n", text.substr(pos, 16).c_str());
+    printf("\n[raw] 可打印版: ");
+    for (size_t i = 0; i < text.size() && i < 200; i++) {
+        unsigned char ch = (unsigned char) text[i];
+        putchar((ch >= 32 && ch < 127) ? ch : '.');
+    }
+    printf("\n");
+
+    size_t pos = std::string::npos;
+    size_t at = 0;
+    while ((at = text.find("bestmove", at)) != std::string::npos) {
+        if (at == 0 || text[at - 1] != 'o') pos = at;
+        at += 8;
+    }
+    if (pos == std::string::npos) { printf("[结果] 没有 bestmove → rc=-2\n"); return 2; }
+    size_t p = pos + 8;
+    while (p < text.size() && text[p] == ' ') p++;
+    if (p + 4 > text.size()) { printf("[结果] bestmove 后面不够 4 字节\n"); return 3; }
+    printf("[结果] 着法 = %.4s\n", text.c_str() + p);
     return 0;
 }
