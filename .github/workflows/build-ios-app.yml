@@ -110,6 +110,8 @@ jobs:
           cp ios/native/pikafish/src/libpikafish.dylib "$APP/Frameworks/" || true
           ls -la "$APP/Frameworks/" || true
           chmod +x "$APP/Frameworks/libpikafish.dylib" || true
+          codesign --force --sign - "$APP/Frameworks/libpikafish.dylib" || true
+          codesign -dv "$APP/Frameworks/libpikafish.dylib" 2>&1 | head -3 || true
 
       - name: 打未签名 ipa
         run: |

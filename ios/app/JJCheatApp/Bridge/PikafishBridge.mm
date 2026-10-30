@@ -20,6 +20,13 @@
 #import "PikafishBridge.h"
 #import <dlfcn.h>
 
+static NSMutableString *g_err = nil;
+static void setErr(NSString *s) {
+    if (!g_err) g_err = [NSMutableString new];
+    [g_err setString:s ?: @""];
+    NSLog(@"[JJCheat] 皮卡鱼: %@", s);
+}
+
 typedef int (*PFBestmoveFn)(const char *fen, int movetimeMs, char *out, int outLen);
 typedef void (*PFVoidFn)(void);
 
@@ -43,12 +50,15 @@ static int g_state = 0;          // 0 未尝试 / 1 已加载 / -1 加载失败
     const char *candidates[] = {
         "@executable_path/Frameworks/libpikafish.dylib",
         "@executable_path/libpikafish.dylib",
+        "@executable_path/Resources/libpikafish.dylib",
         NULL
     };
     for (int i = 0; candidates[i] != NULL && !g_lib; i++) {
         g_lib = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
         if (!g_lib) {
-            NSLog(@"[JJCheat] dlopen %s 失败: %s", candidates[i], dlerror());
+            const char *e = dlerror();
+            setErr([NSString stringWithFormat:@"dlopen 失败: %s", e ? e : "?"]);
+            NSLog(@"[JJCheat] dlopen %s 失败: %s", candidates[i], e ? e : "?");
         }
     }
     if (!g_lib) {
@@ -58,7 +68,7 @@ static int g_state = 0;          // 0 未尝试 / 1 已加载 / -1 加载失败
     g_bestmove = (PFBestmoveFn)dlsym(g_lib, "pf_bestmove");
     g_clear = (PFVoidFn)dlsym(g_lib, "pf_clear");
     if (!g_bestmove) {
-        NSLog(@"[JJCheat] dylib 里没有 pf_bestmove");
+        setErr(@"dylib 里没有 pf_bestmove");
         g_state = -1;
         return NO;
     }
@@ -75,15 +85,18 @@ static int g_state = 0;          // 0 未尝试 / 1 已加载 / -1 加载失败
         BOOL tried = [[NSUserDefaults standardUserDefaults] boolForKey:@"pfTried"];
         BOOL done  = [[NSUserDefaults standardUserDefaults] boolForKey:@"pfOk"];
         if (done) { ok = [self loadEngine]; return; }
-        if (tried) { NSLog(@"[JJCheat] 皮卡鱼上次尝试失败，跳过"); ok = NO; return; }
+        if (tried) { setErr(@"上次尝试失败过，已跳过（可在抽屉里点「重试引擎」）"); ok = NO; return; }
 
         if ([self loadEngine]) {
+            NSLog(@"[JJCheat] dylib 已加载，跑一步验证网络");
             // 真跑一步 50ms 验证网络文件能被读出来
             char buf[32];
             buf[0] = 0;
-            if (g_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
-                           50, buf, sizeof(buf)) == 0 && buf[0]) {
+            int rc = g_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
+                                200, buf, sizeof(buf));
+            if (rc == 0 && buf[0]) {
                 ok = YES;
+                setErr(@"已就绪");
                 [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"pfOk"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             }
@@ -99,6 +112,21 @@ static int g_state = 0;          // 0 未尝试 / 1 已加载 / -1 加载失败
     int rc = g_bestmove(fen.UTF8String, ms, buf, sizeof(buf));
     if (rc != 0 || buf[0] == 0) return nil;
     return [NSString stringWithUTF8String:buf];
+}
+
++ (NSString *)lastError {
+    return g_err ?: @"未尝试";
+}
+
++ (BOOL)retryLoad {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"pfTried"];
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"pfOk"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    g_state = 0;
+    g_bestmove = NULL;
+    g_clear = NULL;
+    // 注意：dylib 一旦加载过就留在进程里，这里只是重新走一遍探测
+    return [self available];
 }
 
 + (void)clear {

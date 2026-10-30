@@ -424,6 +424,11 @@ struct ContentView: View {
                     menuItem("重新开始") { model.restart() }
                     menuItem("上下翻转棋盘（红方在上）") { model.flip() }
                     menuItem("立刻出招") { model.compute() }
+                    menuItem("重试引擎（皮卡鱼）") { model.retryEngine() }
+                    Text("引擎: \(model.engineStatus)")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 12).padding(.vertical, 4)
                     menuItem("关于") {}
                 }
             }

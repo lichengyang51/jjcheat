@@ -79,6 +79,8 @@ final class AppModel: ObservableObject {
     @Published var isBookMove = false
     /// 皮卡鱼有没有编进这个包
     @Published var hasPikafish = false
+    /// 引擎状态文字（显示在抽屉里，方便定位为什么不工作）
+    @Published var engineStatus: String = "未尝试"
     /// 浮窗上一行大字的前缀（"库" / "皮卡鱼" / 空）
     private var panelBadge: String = ""
     /// 当前局面分数（数值，浮窗要显示「分数: N」）
@@ -438,7 +440,11 @@ final class AppModel: ObservableObject {
         // 皮卡鱼探活放后台：首次要初始化 NNUE 网络，会卡一两秒
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let ok = PikafishBridge.available()
-            DispatchQueue.main.async { self?.hasPikafish = ok }
+            let msg = PikafishBridge.lastError()
+            DispatchQueue.main.async {
+                self?.hasPikafish = ok
+                self?.engineStatus = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
+            }
         }
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
@@ -447,6 +453,20 @@ final class AppModel: ObservableObject {
             BroadcastPickerHolder.shared.trigger()
         }
         status = "浮窗已开 · 在系统面板点「开始直播」；浮窗上会显示已收帧数"
+    }
+
+    /// 抽屉里的「重试引擎」
+    func retryEngine() {
+        status = "正在重试加载皮卡鱼…"
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ok = PikafishBridge.retryLoad()
+            let msg = PikafishBridge.lastError()
+            DispatchQueue.main.async {
+                self?.hasPikafish = ok
+                self?.engineStatus = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
+                self?.status = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
+            }
+        }
     }
 
     func stopFloating() {
