@@ -1,30 +1,31 @@
 //
 //  FloatingPanelView.swift
-//  JJCheatApp —— 画中画浮窗的内容（跟鹏飞象棋那个小窗一个意思）
+//  JJCheatApp —— 画中画浮窗内容
 //
-//  左边：按识别结果重绘的小棋盘 + 蓝色着法箭头
-//  右边：着法大字、评分/胜率/深度、你执红还是执黑、提示行
+//  版式照鹏飞 iOS 那个小窗（视频 0:26 / 0:31 两帧）：
+//    左边约 1/3：小棋盘（木纹底、楚河汉界、红黑圆子白字、蓝色着法箭头）
+//    右边约 2/3：浅蓝白底，左边距对齐的大字着法，正常状态只有一行
+//                「库: 兵七进一」/「引擎: 卒1进1」
+//    左下角：一个「菜单」小戳；左上角的叉和右上角的图标是系统画中画自带的
+//    还没识别出局面时，右边显示那四行提示：
+//                「单击可以隐藏关闭按钮」「双指按住操作可以缩放悬浮框」
+//                「正在识别」「注意不要遮挡被连线棋盘」
 //
-//  ★ 外面那圈洋红边框是有用途的，不要改颜色 ★
-//     浮窗会被一起截进截图里，引擎靠这圈 (255,0,255) 精确算出它盖住了哪几格，
-//     那几格整格作废（保留上一帧的值）。棋盘、棋子、JJ象棋界面上都没有这种颜色，
-//     所以认出来就是 100% 确定，不会像以前「按米黄色猜」那样把半盘抹掉。
+//  ★ 外面那圈洋红边框别动 ★
+//     浮窗会被录屏/截图一起拍进去，引擎靠这圈 (255,0,255) 算出它盖住了哪几格，
+//     那几格整格作废（保留上一帧的值）。棋盘上没有这种颜色，所以认出即确定。
 //
 
 import UIKit
 
 final class FloatingPanelView: UIView {
 
-    /// 洋红边框宽度（会被截图缩放，别小于 5）
-    static let borderWidth: CGFloat = 6
+    static let borderWidth: CGFloat = 5
 
     private var board: [Character?] = Array(repeating: nil, count: 90)
     private var moveText: String = ""
-    private var scoreText: String = ""
-    private var winrate: Double = 50
-    private var depth: Int = 0
-    private var sideText: String = ""
-    private var hintText: String = ""
+    private var busyText: String = "正在识别"
+    private var warnText: String = "注意不要遮挡被连线棋盘"
     private var arrowFrom: Int = -1
     private var arrowTo: Int = -1
 
@@ -37,25 +38,19 @@ final class FloatingPanelView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// 一次性推入全部要显示的东西
-    func apply(fen: String,
-               moveChinese: String,
-               fromSq: Int,
-               toSq: Int,
-               scoreText: String,
-               winrate: Double,
-               depth: Int,
-               sideText: String,
-               hint: String) {
+    func apply(fen: String, moveChinese: String, fromSq: Int, toSq: Int, redAtBottom: Bool, hint: String) {
         board = Self.parseFen(fen)
         moveText = moveChinese
         arrowFrom = fromSq
         arrowTo = toSq
-        self.scoreText = scoreText
-        self.winrate = winrate
-        self.depth = depth
-        self.sideText = sideText
-        hintText = hint
+        if !hint.isEmpty { warnText = hint }
+        setNeedsDisplay()
+    }
+
+    /// 还没识别出局面时用这个状态（鹏飞那个「正在识别」的样子）
+    func showWaiting(_ text: String) {
+        moveText = ""
+        busyText = text.isEmpty ? "正在识别" : text
         setNeedsDisplay()
     }
 
@@ -78,7 +73,7 @@ final class FloatingPanelView: UIView {
         return b
     }
 
-    private static func cn(_ ch: Character) -> String {
+    static func cn(_ ch: Character) -> String {
         switch ch {
         case "K": return "帅"; case "A": return "仕"; case "B": return "相"
         case "N": return "马"; case "R": return "车"; case "C": return "炮"
@@ -94,159 +89,206 @@ final class FloatingPanelView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         let bw = Self.borderWidth
 
-        // ---- 洋红边框（引擎靠它定位，别动）----
+        // 洋红边框（引擎定位用，别动）
         UIColor(red: 1, green: 0, blue: 1, alpha: 1).setFill()
         UIRectFill(bounds)
-        UIColor(red: 0.06, green: 0.07, blue: 0.10, alpha: 1).setFill()
-        UIRectFill(bounds.insetBy(dx: bw, dy: bw))
 
-        let inner = bounds.insetBy(dx: bw + 4, dy: bw + 4)
+        let inner = bounds.insetBy(dx: bw, dy: bw)
 
-        // ---- 棋盘区（左边，approx 9:10 比例）----
-        let boardW = min(inner.width * 0.46, inner.height * 8.0 / 9.0)
-        let cell = boardW / 8.0
-        let boardH = cell * 9.0
-        let ox = inner.minX + 2
-        let oy = inner.minY + (inner.height - boardH) / 2
+        // 左边：小棋盘
+        let boardW = inner.width * 0.335
+        let boardRect = CGRect(x: inner.minX, y: inner.minY, width: boardW, height: inner.height)
+        drawBoard(in: boardRect, ctx: ctx)
 
-        // 木色底
-        UIColor(red: 0.90, green: 0.81, blue: 0.62, alpha: 1).setFill()
-        UIBezierPath(roundedRect: CGRect(x: ox - cell * 0.4, y: oy - cell * 0.4,
-                                        width: boardW + cell * 0.8, height: boardH + cell * 0.8),
-                     cornerRadius: cell * 0.25).fill()
+        // 右边：鹏飞那种浅蓝白文字区
+        let textRect = CGRect(x: boardRect.maxX, y: inner.minY,
+                              width: inner.maxX - boardRect.maxX, height: inner.height)
+        UIColor(red: 0.929, green: 0.945, blue: 0.973, alpha: 1).setFill()
+        UIRectFill(textRect)
 
-        // 网格
-        ctx.setStrokeColor(UIColor(red: 0.35, green: 0.23, blue: 0.11, alpha: 0.85).cgColor)
-        ctx.setLineWidth(max(0.7, cell * 0.035))
-        for r in 0..<10 {
-            ctx.move(to: CGPoint(x: ox, y: oy + CGFloat(r) * cell))
-            ctx.addLine(to: CGPoint(x: ox + boardW, y: oy + CGFloat(r) * cell))
+        if moveText.isEmpty {
+            drawWaiting(in: textRect)
+        } else {
+            drawMove(in: textRect)
         }
-        for c in 0..<9 {
-            ctx.move(to: CGPoint(x: ox + CGFloat(c) * cell, y: oy))
-            ctx.addLine(to: CGPoint(x: ox + CGFloat(c) * cell, y: oy + boardH))
+
+        // 左下角「菜单」小戳（鹏飞也有一个）
+        let menuW = boardW * 0.34, menuH = inner.height * 0.14
+        let menuRect = CGRect(x: inner.minX + boardW * 0.03,
+                              y: inner.maxY - menuH - inner.height * 0.03,
+                              width: menuW, height: menuH)
+        UIColor(red: 0.62, green: 0.62, blue: 0.64, alpha: 0.85).setFill()
+        UIBezierPath(roundedRect: menuRect, cornerRadius: menuH * 0.22).fill()
+        let menuAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: menuH * 0.62, weight: .medium),
+            .foregroundColor: UIColor.white
+        ]
+        let ms = "菜单" as NSString
+        let msz = ms.size(withAttributes: menuAttrs)
+        ms.draw(at: CGPoint(x: menuRect.midX - msz.width / 2, y: menuRect.midY - msz.height / 2),
+                withAttributes: menuAttrs)
+    }
+
+    // MARK: - 小棋盘
+
+    private func drawBoard(in r: CGRect, ctx: CGContext) {
+        UIColor(red: 0.902, green: 0.847, blue: 0.706, alpha: 1).setFill()
+        UIRectFill(r)
+
+        let cell = min(r.width * 0.94 / 8.0, r.height * 0.86 / 9.0)
+        let ox = r.minX + (r.width - cell * 8) / 2
+        let oy = r.minY + (r.height - cell * 9) / 2
+
+        func pt(_ rr: Int, _ cc: Int) -> CGPoint {
+            CGPoint(x: ox + CGFloat(cc) * cell, y: oy + CGFloat(rr) * cell)
+        }
+
+        ctx.setStrokeColor(UIColor(red: 0.42, green: 0.30, blue: 0.16, alpha: 0.75).cgColor)
+        ctx.setLineWidth(max(0.5, cell * 0.045))
+        for rr in 0..<10 {
+            ctx.move(to: pt(rr, 0)); ctx.addLine(to: pt(rr, 8))
+        }
+        for cc in 0..<9 {
+            ctx.move(to: pt(0, cc)); ctx.addLine(to: pt(9, cc))
         }
         ctx.strokePath()
-        // 九宫
-        ctx.setLineWidth(max(0.7, cell * 0.03))
         for (r0, c0, r1, c1) in [(0, 3, 2, 5), (7, 3, 9, 5)] {
-            ctx.move(to: CGPoint(x: ox + CGFloat(c0) * cell, y: oy + CGFloat(r0) * cell))
-            ctx.addLine(to: CGPoint(x: ox + CGFloat(c1) * cell, y: oy + CGFloat(r1) * cell))
-            ctx.move(to: CGPoint(x: ox + CGFloat(c1) * cell, y: oy + CGFloat(r0) * cell))
-            ctx.addLine(to: CGPoint(x: ox + CGFloat(c0) * cell, y: oy + CGFloat(r1) * cell))
+            ctx.move(to: pt(r0, c0)); ctx.addLine(to: pt(r1, c1))
+            ctx.move(to: pt(r0, c1)); ctx.addLine(to: pt(r1, c0))
         }
         ctx.strokePath()
 
-        // 棋子
-        let rad = cell * 0.42
+        // 楚河 汉界
+        let riverAttrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: max(4, cell * 0.40), weight: .regular),
+            .foregroundColor: UIColor(red: 0.45, green: 0.33, blue: 0.18, alpha: 0.75)
+        ]
+        let cy = oy + cell * 4.5
+        ("楚河" as NSString).draw(at: CGPoint(x: ox + cell * 1.0, y: cy - cell * 0.26), withAttributes: riverAttrs)
+        ("汉界" as NSString).draw(at: CGPoint(x: ox + cell * 5.2, y: cy - cell * 0.26), withAttributes: riverAttrs)
+
+        // 棋子：红子红盘、黑子黑盘、字白（跟鹏飞小窗一样）
+        let rad = cell * 0.40
         for sq in 0..<90 {
             guard let ch = board[sq] else { continue }
-            let r = sq / 9, c = sq % 9
-            let p = CGPoint(x: ox + CGFloat(c) * cell, y: oy + CGFloat(r) * cell)
+            let rr = sq / 9, cc = sq % 9
+            let p = pt(rr, cc)
             let disc = CGRect(x: p.x - rad, y: p.y - rad, width: rad * 2, height: rad * 2)
-            UIColor(red: 0.99, green: 0.96, blue: 0.86, alpha: 1).setFill()
+            (ch.isUppercase ? UIColor(red: 0.72, green: 0.16, blue: 0.13, alpha: 1)
+                            : UIColor(red: 0.18, green: 0.18, blue: 0.20, alpha: 1)).setFill()
             UIBezierPath(ovalIn: disc).fill()
-            UIColor(red: 0.45, green: 0.32, blue: 0.18, alpha: 1).setStroke()
-            let ring = UIBezierPath(ovalIn: disc.insetBy(dx: 0.5, dy: 0.5))
-            ring.lineWidth = max(0.6, cell * 0.03)
+            UIColor(white: 1.0, alpha: 0.5).setStroke()
+            let ring = UIBezierPath(ovalIn: disc.insetBy(dx: 0.4, dy: 0.4))
+            ring.lineWidth = max(0.4, cell * 0.03)
             ring.stroke()
-            let isRed = ch.isUppercase
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: rad * 1.25, weight: .bold),
-                .foregroundColor: isRed
-                    ? UIColor(red: 0.78, green: 0.08, blue: 0.08, alpha: 1)
-                    : UIColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1)
+                .font: UIFont.systemFont(ofSize: rad * 1.30, weight: .bold),
+                .foregroundColor: UIColor.white
             ]
             let s = Self.cn(ch) as NSString
             let sz = s.size(withAttributes: attrs)
             s.draw(at: CGPoint(x: p.x - sz.width / 2, y: p.y - sz.height / 2), withAttributes: attrs)
         }
 
-        // ---- 蓝色着法箭头 ----
+        // 蓝色着法箭头
         if arrowFrom >= 0 && arrowTo >= 0 {
-            let r0 = arrowFrom / 9, c0 = arrowFrom % 9
-            let r1 = arrowTo / 9, c1 = arrowTo % 9
-            let p0 = CGPoint(x: ox + CGFloat(c0) * cell, y: oy + CGFloat(r0) * cell)
-            let p1 = CGPoint(x: ox + CGFloat(c1) * cell, y: oy + CGFloat(r1) * cell)
-            let blue = UIColor(red: 0.25, green: 0.45, blue: 1.0, alpha: 0.95)
-            blue.setStroke()
-            blue.setFill()
+            let p0 = pt(arrowFrom / 9, arrowFrom % 9)
+            let p1 = pt(arrowTo / 9, arrowTo % 9)
+            let blue = UIColor(red: 0.23, green: 0.42, blue: 0.92, alpha: 0.95)
+            blue.setStroke(); blue.setFill()
             let path = UIBezierPath()
-            path.lineWidth = max(2.0, cell * 0.13)
+            path.lineWidth = max(1.6, cell * 0.16)
             path.lineCapStyle = .round
             path.move(to: p0)
             path.addLine(to: p1)
             path.stroke()
             let ang = atan2(p1.y - p0.y, p1.x - p0.x)
-            let head = max(4.0, cell * 0.34)
+            let head = max(3.5, cell * 0.42)
             let tri = UIBezierPath()
             tri.move(to: p1)
-            tri.addLine(to: CGPoint(x: p1.x - head * cos(ang - 0.42), y: p1.y - head * sin(ang - 0.42)))
-            tri.addLine(to: CGPoint(x: p1.x - head * cos(ang + 0.42), y: p1.y - head * sin(ang + 0.42)))
+            tri.addLine(to: CGPoint(x: p1.x - head * cos(ang - 0.40), y: p1.y - head * sin(ang - 0.40)))
+            tri.addLine(to: CGPoint(x: p1.x - head * cos(ang + 0.40), y: p1.y - head * sin(ang + 0.40)))
             tri.close()
             tri.fill()
         }
+    }
 
-        // ---- 右边文字区 ----
-        let tx = ox + boardW + cell * 1.2
-        let tw = inner.maxX - tx
-        var y = inner.minY + 2
+    // MARK: - 右边文字
 
-        let moveFull = moveText.isEmpty ? "—" : moveText
-        var moveSize = min(inner.height * 0.30, 56)
-        var moveAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: moveSize, weight: .heavy),
-            .foregroundColor: UIColor(red: 1.0, green: 0.92, blue: 0.35, alpha: 1)
+    /// 正常状态：一行大字着法（鹏飞：「库: 兵七进一」）
+    private func drawMove(in r: CGRect) {
+        let padX = r.width * 0.05
+        let availW = r.width - padX * 2
+        var size = min(r.height * 0.34, 52)
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: size, weight: .regular),
+            .foregroundColor: UIColor(red: 0.22, green: 0.28, blue: 0.40, alpha: 1)
         ]
-        var ms = (moveFull as NSString).size(withAttributes: moveAttrs)
-        while ms.width > tw && moveSize > 12 {
-            moveSize -= 1
-            moveAttrs[.font] = UIFont.systemFont(ofSize: moveSize, weight: .heavy)
-            ms = (moveFull as NSString).size(withAttributes: moveAttrs)
+        let s = moveText as NSString
+        var sz = s.size(withAttributes: attrs)
+        while sz.width > availW && size > 10 {
+            size -= 1
+            attrs[.font] = UIFont.systemFont(ofSize: size, weight: .regular)
+            sz = s.size(withAttributes: attrs)
         }
-        (moveFull as NSString).draw(at: CGPoint(x: tx + max(0, (tw - ms.width) / 2), y: y),
-                                    withAttributes: moveAttrs)
-        y += ms.height + 2
-
-        // 评分 + 胜率 + 深度
-        let subParts = [scoreText, String(format: "%.0f%%", winrate), depth > 0 ? "深\(depth)" : ""]
-            .filter { !$0.isEmpty }
-        if !subParts.isEmpty {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.monospacedDigitSystemFont(ofSize: max(11, inner.height * 0.075), weight: .semibold),
-                .foregroundColor: UIColor(red: 0.60, green: 0.82, blue: 1.0, alpha: 1)
-            ]
-            let s = subParts.joined(separator: "  ") as NSString
-            let sz = s.size(withAttributes: attrs)
-            s.draw(at: CGPoint(x: tx + max(0, (tw - sz.width) / 2), y: y), withAttributes: attrs)
-            y += sz.height + 2
+        // 还放不下就折两行 —— 宁可折行也不截断（用户就是被截断气到的）
+        if sz.width > availW && s.length >= 4 {
+            let chars = Array(moveText)
+            let half = (chars.count + 1) / 2
+            let l1 = String(chars[0..<half]) as NSString
+            let l2 = String(chars[half...]) as NSString
+            var fs = size
+            var a = attrs
+            var w1 = l1.size(withAttributes: a).width
+            var w2 = l2.size(withAttributes: a).width
+            while max(w1, w2) > availW && fs > 10 {
+                fs -= 1
+                a[.font] = UIFont.systemFont(ofSize: fs, weight: .regular)
+                w1 = l1.size(withAttributes: a).width
+                w2 = l2.size(withAttributes: a).width
+            }
+            _ = (w1, w2)
+            let lh = l1.size(withAttributes: a).height
+            let y0 = r.midY - lh
+            l1.draw(at: CGPoint(x: r.minX + padX, y: y0), withAttributes: a)
+            l2.draw(at: CGPoint(x: r.minX + padX, y: y0 + lh * 0.98), withAttributes: a)
+            return
         }
+        s.draw(at: CGPoint(x: r.minX + padX, y: r.midY - sz.height / 2), withAttributes: attrs)
+    }
 
-        // 你执红 / 你执黑
-        if !sideText.isEmpty {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: max(11, inner.height * 0.072), weight: .semibold),
-                .foregroundColor: UIColor(red: 0.85, green: 0.88, blue: 0.95, alpha: 1)
-            ]
-            let s = sideText as NSString
-            let sz = s.size(withAttributes: attrs)
-            s.draw(at: CGPoint(x: tx + max(0, (tw - sz.width) / 2), y: y), withAttributes: attrs)
-            y += sz.height + 2
-        }
+    /// 等待/提示状态：鹏飞那四行
+    private func drawWaiting(in r: CGRect) {
+        let padX = r.width * 0.05
+        let availW = r.width - padX * 2
+        var y = r.minY + r.height * 0.05
 
-        // 提示行（例如「浮窗挡住 3 格，往边上拖」）
-        if !hintText.isEmpty {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: max(10, inner.height * 0.062), weight: .regular),
-                .foregroundColor: UIColor(red: 0.98, green: 0.62, blue: 0.28, alpha: 1)
+        func line(_ text: String, size: CGFloat, color: UIColor) {
+            var fs = size
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: fs, weight: .regular),
+                .foregroundColor: color
             ]
-            var s = hintText as NSString
+            let s = text as NSString
             var sz = s.size(withAttributes: attrs)
-            while sz.width > tw && s.length > 5 {
-                s = (String(s.substring(to: s.length - 2)) + "…") as NSString
+            while sz.width > availW && fs > 6 {
+                fs -= 0.5
+                attrs[.font] = UIFont.systemFont(ofSize: fs, weight: .regular)
                 sz = s.size(withAttributes: attrs)
             }
-            s.draw(at: CGPoint(x: tx + max(0, (tw - sz.width) / 2), y: y), withAttributes: attrs)
+            s.draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs)
+            y += sz.height + r.height * 0.02
         }
+
+        let h = r.height
+        guard h > 90 else {
+            line(busyText, size: h * 0.20, color: UIColor(red: 0.18, green: 0.44, blue: 0.88, alpha: 1))
+            return
+        }
+        line("单击可以隐藏关闭按钮", size: h * 0.085, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
+        line("双指按住操作可以缩放悬浮窗", size: h * 0.085, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
+        y += h * 0.06
+        line(busyText, size: h * 0.16, color: UIColor(red: 0.16, green: 0.42, blue: 0.88, alpha: 1))
+        line(warnText, size: h * 0.10, color: UIColor(red: 0.20, green: 0.46, blue: 0.90, alpha: 1))
     }
 }

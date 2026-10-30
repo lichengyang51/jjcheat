@@ -383,6 +383,7 @@ final class AppModel: ObservableObject {
         winratePct = JJEngine.double(res, "winrate", 50)
         depth = JJEngine.int(res, "depth", 0)
         status = "实时 · \(liveInfo) · \(redAtBottom ? "你执红" : "你执黑")"
+        _ = rawFen
         refreshPanel()
     }
 
@@ -416,18 +417,22 @@ final class AppModel: ObservableObject {
     }
 
     /// 把当前结论推到浮窗
+    ///
+    /// 版式照鹏飞：右边只有一行大字，带来源前缀 —— 鹏飞是「库: 兵七进一」（开局库），
+    /// 我们是引擎算的，所以写「引擎: 卒1进1」。没招的时候就显示「正在识别」。
     func refreshPanel() {
         guard PiPController.shared.isActive else { return }
         let hint: String = pipCells > 0 ? "浮窗挡住 \(pipCells) 格，往边上拖" : ""
+        if bestChinese.isEmpty {
+            PiPController.shared.waiting(liveActive ? "正在识别" : "等一张截图")
+            return
+        }
         PiPController.shared.update(
             fen: panelFen(),
-            moveChinese: bestChinese,
+            moveChinese: "引擎: " + bestChinese,
             fromSq: panelMap(fromSq),
             toSq: panelMap(toSq),
-            scoreText: scoreText,
-            winrate: winratePct,
-            depth: depth,
-            sideText: redAtBottom ? "你执红" : "你执黑",
+            redAtBottom: redAtBottom,
             hint: hint
         )
     }

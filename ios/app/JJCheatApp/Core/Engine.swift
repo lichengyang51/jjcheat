@@ -147,12 +147,15 @@ final class JJEngine {
         }
         return out
     }
-    func process(pixels: Data, width: Int, height: Int, timeMs: Int) -> [String: Any]? {
+    /// - Parameter live: 实时模式。实时帧不走「连续 3 帧一致才认」那一套 ——
+///   对方落子后棋盘会一直保持新状态，但稳定值机制会因为某几格置信度偏低
+///   而继续沿用旧值，表现就是「对方走了，浮窗里没变」。实时模式直接采信本帧。
+func process(pixels: Data, width: Int, height: Int, timeMs: Int, live: Bool = false) -> [String: Any]? {
         guard loadIfNeeded() else { return nil }
         var out: [String: Any]?
         queue.sync { () -> Void in
             guard let arr = self.makeTypedArray(pixels, width: width, height: height) else { return }
-            let opts: [String: Any] = ["timeMs": timeMs, "maxDiff": 1]
+            let opts: [String: Any] = ["timeMs": timeMs, "maxDiff": 1, "live": live ? 1 : 0]
             let res = self.callEngine("process", args: [arr, width, height, opts])
             out = Self.dict(res)
         }

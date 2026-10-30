@@ -69,24 +69,19 @@ final class PiPController: NSObject {
         onStateChange?(false, nil)
     }
 
-    func update(fen: String,
-                moveChinese: String,
-                fromSq: Int,
-                toSq: Int,
-                scoreText: String,
-                winrate: Double,
-                depth: Int,
-                sideText: String,
-                hint: String) {
+    /// 推内容进浮窗（版式固定成鹏飞那样：小棋盘 + 一行大字着法）
+    func update(fen: String, moveChinese: String, fromSq: Int, toSq: Int, redAtBottom: Bool, hint: String) {
         panel.apply(fen: fen,
                     moveChinese: moveChinese,
                     fromSq: fromSq,
                     toSq: toSq,
-                    scoreText: scoreText,
-                    winrate: winrate,
-                    depth: depth,
-                    sideText: sideText,
+                    redAtBottom: redAtBottom,
                     hint: hint)
+    }
+
+    /// 还没识别出局面时的「正在识别」状态
+    func waiting(_ text: String) {
+        panel.showWaiting(text)
     }
 
     private func configureAudioSession() {

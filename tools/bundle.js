@@ -601,6 +601,13 @@ var JJEngine = {
     // 做法：分数够高的格子直接采信；分数太低的格子沿用上一帧的稳定值，
     // 连续多帧都低才认这一次的结果（避免被一个动画帧永久带偏）。
     var LOWCONF = 0.55;
+    // 实时模式（录屏 + 浮窗）：本帧结果直接采信。
+    //
+    //   为什么要单独一条：稳定值机制本来是为了挡落子动画的一两帧干扰，
+    //   但实时模式下棋盘会一直停在「对方刚走完」的状态里 ——
+    //   那几格刚好因为放大/高亮圈分数偏低，就一直沿用旧值，
+    //   表现就是「对方走了，浮窗里没变」。所以在实时模式下不搞保留。
+    var liveMode = !!(opts && opts.live);
     var prevCodes = session.stableCodes;
     var mergedCodes = new Array(90);
     var lowConfCount = 0;
@@ -620,6 +627,7 @@ var JJEngine = {
       }
       var raw = cls.codes ? cls.codes[sm] : 0;
       var conf = cls.conf ? (cls.conf[sm] || 0) : 1;
+      if (liveMode) { mergedCodes[sm] = raw; continue; }
       var st = stats[sm];
       var warm = st ? (st.warmR || 0) : 0;
       var okCell;
@@ -766,7 +774,7 @@ var JJEngine = {
     }
     // 要求连续 3 帧识别结果完全一致才认为局面定下来了。
     // 2 帧门槛太低：一次落子动画 + 高亮圈切换就能凑够两帧抖动。
-    var codesSettled = (session.codesStable >= 2);
+    var codesSettled = liveMode ? true : (session.codesStable >= 2);
 
     // 第一帧只要认出来就直接落地，不再等「3 帧完全一致」。
     //   之前一律要求 3 帧一致才更新，结果中途进对局时识别在两组结果之间抖
