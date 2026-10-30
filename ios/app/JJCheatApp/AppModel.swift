@@ -284,7 +284,7 @@ final class AppModel: ObservableObject {
             // ★ 皮卡鱼优先：它比本机 JS 引擎高一千多分
             var pfResult: [String: Any]? = nil
             if PikafishBridge.available(),
-               let pfMove = PikafishBridge.bestMoveForFen(full, movetimeMs: Int32(ms)) {
+               let pfMove = PikafishBridge.bestMove(forFen: full, movetimeMs: Int32(ms)) {
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: pfMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {
