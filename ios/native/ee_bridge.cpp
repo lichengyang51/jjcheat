@@ -108,6 +108,18 @@ int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
     if (p + 4 > text.size()) return -2;
     std::string mv = text.substr(p, 4);
     if (mv.compare(0, 4, "nobe") == 0) return -2;
+
+    // ★ 坐标要翻一下 ★
+    //
+    //   象眼的 rank 是从「红方底线」往上数的（0 = 红方底线，9 = 黑方底线），
+    //   我们的 UCCI 是从「黑方底线」数的（0 = 黑方底线，跟 FEN 行号一致）。
+    //   不翻就是整盘上下镜像：开局它会说 c3c4（它眼里的兵七进一），
+    //   在我们这边 c3→c4 是个黑卒在走，合法性闸门直接丢弃 → 浮窗一直「正在识别」。
+    //   文件名（a~i）两边一致，只需要把两个 rank 数字翻成 9 - r。
+    if (mv.size() == 4 && mv[1] >= '0' && mv[1] <= '9' && mv[3] >= '0' && mv[3] <= '9') {
+        mv[1] = (char) ('0' + (9 - (mv[1] - '0')));
+        mv[3] = (char) ('0' + (9 - (mv[3] - '0')));
+    }
     snprintf(out, outLen, "%s", mv.c_str());
     return 0;
 }

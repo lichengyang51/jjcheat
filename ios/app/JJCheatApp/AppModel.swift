@@ -291,9 +291,12 @@ final class AppModel: ObservableObject {
             var pfResult: [String: Any]? = nil
             if EleeyeBridge.available(),
                let eeMove = EleeyeBridge.bestMove(full, movetimeMs: Int32(ms)) {
-                guard JJEngine.shared.isLegalMove(fen: full, ucci: eeMove) else {
-                    return
-                }
+                // 不合法就当作这个引擎没给答案，继续走后面的 JS 引擎，
+                // 不能直接 return —— 那会让浮窗一直停在「正在识别」。
+                let legal = JJEngine.shared.isLegalMove(fen: full, ucci: eeMove)
+                if !legal {
+                    NSLog("[JJCheat] 象眼给的着法不合法: %@", eeMove)
+                } else {
                 self.engineUsed = "象眼"
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: eeMove)
                 let zh = (info["chinese"] as? String) ?? ""
@@ -309,6 +312,7 @@ final class AppModel: ObservableObject {
                             "winrate": 0.5, "depth": 0
                         ]]
                     ]
+                }
                 }
             }
             let res = pfResult ?? JJEngine.shared.analyzeTop(fen: full, timeMs: ms, count: 8)
