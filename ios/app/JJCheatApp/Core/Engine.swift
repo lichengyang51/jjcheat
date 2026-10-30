@@ -136,6 +136,17 @@ final class JJEngine {
         return out
     }
 
+    /// 多候选着法（界面上的「思考列表」）
+    func analyzeTop(fen: String, timeMs: Int, count: Int) -> [String: Any]? {
+        guard loadIfNeeded() else { return nil }
+        var out: [String: Any]?
+        queue.sync { () -> Void in
+            let opts: [String: Any] = ["timeMs": timeMs, "count": count]
+            let res = self.callEngine("analyzeTop", args: [fen, opts])
+            out = Self.dict(res)
+        }
+        return out
+    }
     func process(pixels: Data, width: Int, height: Int, timeMs: Int) -> [String: Any]? {
         guard loadIfNeeded() else { return nil }
         var out: [String: Any]?

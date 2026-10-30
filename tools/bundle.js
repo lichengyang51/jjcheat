@@ -808,6 +808,17 @@ var JJEngine = {
   },
 
   /** 直接分析一个 FEN（不走视觉） */
+  /**
+   * 多候选着法：界面上的「思考列表」
+   * 返回 {bestmove, score, depth, nodes, ms, rows:[{move, chinese, score, winrate, depth}]}
+   */
+  analyzeTop: function (fen, opts) {
+    try {
+      return ENG.analyzeTop(fen, opts || {});
+    } catch (e) {
+      return { bestmove: '', score: 0, depth: 0, nodes: 0, ms: 0, rows: [] };
+    }
+  },
   analyzeFen: function (fen, timeMs) {
     var res = ENG.analyze(fen, { timeMs: timeMs || 1000 });
     var pos = new POS.Position(fen);

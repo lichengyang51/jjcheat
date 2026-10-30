@@ -2,47 +2,72 @@
 //  AppModel.swift
 //  JJCheatApp
 //
-//  整个 App 就一件事：把一张棋盘照片（拍照，或相册里的截图）
-//  变成「当前局面 + 该走哪一步」。
+//  照鹏飞象棋移动版 iOS 的交互来做：
+//    照片（拍照 / 相册）→ 识别棋盘 → 引擎给出多候选着法 → 你自己走
 //
-//  【为什么是这条架构】
-//   鹏飞象棋移动版在 App Store 上的官方说明写的是
-//   「可以拍照识别实体棋盘局面或者软件棋盘局面」——
-//   它 iOS 版的输入是照片，不是录屏。
-//
-//   照片是原生分辨率、无损，颜色和清晰度都最好；
-//   录屏（ReplayKit）走 YUV 420 + 降采样，色度细节只剩 1/4，
-//   字形被糊掉，兵种就会认错（实测：黑将被认成炮）。
-//   这条路还顺带省掉广播扩展、画中画、回环传帧、浮窗遮挡污染。
+//  鹏飞在 App Store 的官方说明写的是「可以拍照识别实体棋盘局面或者软件棋盘局面」，
+//  所以它的 iOS 输入是照片、不是录屏。照片是原生分辨率、无损；
+//  录屏走 YUV 420 + 降采样会把字形糊掉，兵种就会认错（实测：黑将认成炮）。
 //
 
 import Foundation
 import SwiftUI
 import UIKit
 
+/// 一行候选着法（对应界面上「思考」表格的一行）
+struct CandidateRow: Identifiable {
+    let id = UUID()
+    let chinese: String
+    let move: String
+    let score: Int
+    let winrate: Double
+    let depth: Int
+    var note: String = ""
+}
+
 final class AppModel: ObservableObject {
 
-    // MARK: - 对外状态
+    // MARK: - 盘面
 
     @Published var board: [Character?] = Array(repeating: nil, count: 90)
-    @Published var fen: String = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
-    @Published var moveText: String = ""
-    @Published var scoreText: String = ""
-    @Published var winrate: Double = 50
-    @Published var depth: Int = 0
     @Published var redAtBottom: Bool = true
+
+    // MARK: - 引擎输出
+
+    @Published var rows: [CandidateRow] = []
+    @Published var bestChinese: String = ""
+    @Published var scoreText: String = ""
+    @Published var winratePct: Double = 50
+    @Published var depth: Int = 0
+    @Published var nodes: Int = 0
+    @Published var elapsed: Double = 0
     @Published var fromSq: Int = -1
     @Published var toSq: Int = -1
-    @Published var status: String = "点「拍照」或「相册」，选一张棋盘照片"
-    @Published var busy: Bool = false
-    @Published var previewImage: UIImage?
-    @Published var pickedKind: PieceKind? = nil
+
+    // MARK: - 界面状态
+
+    @Published var thinking = false
+    @Published var demoProgress: Double = -1
+    @Published var status: String = "点上排「拍照」或「相册」取一张棋盘照片"
     @Published var showCamera = false
     @Published var showLibrary = false
+    @Published var showMenu = false
+    @Published var showSettings = false
+    @Published var tabIndex: Int = 0            // 0 思考 / 1 开局库 / 2 用时
+    @Published var pickedKind: PieceKind? = nil
+    @Published var editMode = false
+    @Published var pasteAlert = false
+    @Published var pasteText = ""
+
+    /// 思考时长（秒），对应设置页的「局时」
+    @Published var thinkSeconds: Double = 3.0
 
     let buildTag: String = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
 
     private var started = false
+
+    /// 演示计时器
+    private var demoTimer: Timer?
 
     // MARK: - 启动
 
@@ -50,136 +75,203 @@ final class AppModel: ObservableObject {
         guard !started else { return }
         started = true
         _ = JJEngine.shared
-        setBoardFromFen(fen)
+        setBoardFromFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1")
+        compute()
     }
 
     // MARK: - 识别
 
     func analyze(image: UIImage) {
         guard let rgba = ScreenshotReader.rgba(from: image) else {
-            status = "这张图读不出来，换一张试试"
+            status = "这张图读不出来，换一张"
             return
         }
-        previewImage = image
-        busy = true
-        status = "识别中…（\(rgba.width)×\(rgba.height)）"
+        thinking = true
+        status = "识别中… \(rgba.width)×\(rgba.height)"
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-
             guard let corners = JJEngine.shared.autoDetectBoard(pixels: rgba.data,
                                                                width: rgba.width,
                                                                height: rgba.height) else {
                 DispatchQueue.main.async {
-                    self.busy = false
-                    self.status = "没找到棋盘。让整块棋盘完整出现在照片里，四边留一点空"
+                    self.thinking = false
+                    self.status = "没找到棋盘。让整块棋盘完整出现在照片里，四边留点空"
                 }
                 return
             }
             JJEngine.shared.setCorners(corners)
-
             var res: [String: Any]?
             for _ in 0..<3 {
                 res = JJEngine.shared.process(pixels: rgba.data,
                                               width: rgba.width,
                                               height: rgba.height,
-                                              timeMs: 1500)
+                                              timeMs: 1200)
             }
             let fenStr = (res?["fen"] as? String) ?? ""
             let mySide = (res?["mySide"] as? String) ?? "red"
-
             DispatchQueue.main.async {
-                self.busy = false
+                self.thinking = false
                 guard !fenStr.isEmpty else {
-                    self.status = "识别失败，可以手动摆子后点「计算」"
+                    self.status = "没认出来，可手动摆子后点「立刻出招」"
                     return
                 }
-                self.fen = fenStr
-                self.redAtBottom = (mySide == "red")
                 self.setBoardFromFen(fenStr)
-                self.applyEngineResult(res)
+                self.redAtBottom = (mySide == "red")
                 let n = self.board.compactMap { $0 }.count
-                self.status = "识别完成 · 共 \(n) 个子 · \(mySide == "red" ? "你执红" : "你执黑") · 点格子可改错子"
+                self.status = "识别完成 · \(n) 个子 · \(mySide == "red" ? "你执红" : "你执黑")"
+                self.compute()
             }
         }
     }
 
-    /// 用当前盘面重新算一步
-    func recompute() {
-        busy = true
-        status = "计算中…"
+    // MARK: - 计算（多候选）
+
+    func compute() {
+        guard !thinking else { return }
+        thinking = true
+        rows = []
+        status = "思考中…"
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
+        let ms = Int(max(0.4, thinkSeconds) * 1000)
+        let t0 = Date()
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let res = JJEngine.shared.analyzeFen(fen: full, timeMs: 3000)
+            let res = JJEngine.shared.analyzeTop(fen: full, timeMs: ms, count: 8)
+            let cost = Date().timeIntervalSince(t0)
             DispatchQueue.main.async {
-                self.busy = false
-                self.fen = full
-                self.applyEngineResult(res)
-                self.status = self.moveText.isEmpty ? "没算出着法，检查一下盘面" : "建议：\(self.moveText)"
+                self.thinking = false
+                self.elapsed = Double(JJEngine.int(res, "ms", Int(cost * 1000))) / 1000.0
+                self.depth = JJEngine.int(res, "depth", 0)
+                self.nodes = JJEngine.int(res, "nodes", 0)
+                let best = JJEngine.str(res, "bestmove", "")
+                let sc = JJEngine.int(res, "score", 0)
+                self.scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
+                self.winratePct = JJEngine.double(res, "winrate", 50)
+
+                var list: [CandidateRow] = []
+                if let raw = res?["rows"] as? [[String: Any]] {
+                    for r in raw {
+                        list.append(CandidateRow(
+                            chinese: (r["chinese"] as? String) ?? "",
+                            move: (r["move"] as? String) ?? "",
+                            score: (r["score"] as? Int) ?? Int((r["score"] as? Double) ?? 0),
+                            winrate: ((r["winrate"] as? Double) ?? 0) * 100,
+                            depth: (r["depth"] as? Int) ?? 0
+                        ))
+                    }
+                }
+                self.rows = list
+                if let first = list.first {
+                    self.bestChinese = first.chinese
+                    self.fromSq = Self.sqOf(first.move, 0)
+                    self.toSq = Self.sqOf(first.move, 1)
+                } else {
+                    self.bestChinese = best
+                    self.fromSq = -1
+                    self.toSq = -1
+                }
+                self.status = self.bestChinese.isEmpty ? "没算出着法" : "已出招"
             }
         }
     }
 
-    private func applyEngineResult(_ res: [String: Any]?) {
-        guard let res else { return }
-        let cn = JJEngine.str(res, "chinese", JJEngine.str(res, "suggestChinese", ""))
-        moveText = cn
-        let sc = JJEngine.int(res, "score", 0)
-        scoreText = (sc >= 0 ? "+" : "") + String(format: "%.2f", Double(sc) / 100.0)
-        winrate = JJEngine.double(res, "winrate", 50)
-        depth = JJEngine.int(res, "depth", 0)
-        let f = JJEngine.int(res, "from", -1)
-        let t = JJEngine.int(res, "to", -1)
-        fromSq = (f >= 0 && f < 90) ? f : -1
-        toSq = (t >= 0 && t < 90) ? t : -1
+    /// ucci 串（如 b7c7）取第 idx 个格子（0=from,1=to）
+    static func sqOf(_ ucci: String, _ idx: Int) -> Int {
+        guard ucci.count >= 4 else { return -1 }
+        let s = Array(ucci)
+        let part = idx == 0 ? [s[0], s[1]] : [s[2], s[3]]
+        guard let c = part[0].asciiValue, let r = part[1].wholeNumberValue else { return -1 }
+        let col = Int(c) - 97
+        guard col >= 0, col < 9, r >= 0, r < 10 else { return -1 }
+        return r * 9 + col
     }
 
-    // MARK: - 手动纠错
+    // MARK: - 演示
+
+    func playDemo() {
+        demoTimer?.invalidate()
+        guard fromSq >= 0, toSq >= 0 else { return }
+        demoProgress = 0
+        var t: Double = 0
+        demoTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            t += 0.03 / 0.7
+            if t >= 1 {
+                timer.invalidate()
+                self.demoProgress = -1
+            } else {
+                self.demoProgress = t
+            }
+        }
+    }
+
+    /// 点表格里的某一行 → 把箭头切成那一步
+    func pickRow(_ row: CandidateRow) {
+        bestChinese = row.chinese
+        fromSq = Self.sqOf(row.move, 0)
+        toSq = Self.sqOf(row.move, 1)
+        playDemo()
+    }
+
+    /// 左右翻页：在候选着法之间走
+    func demoStep(_ delta: Int) {
+        guard !rows.isEmpty else { return }
+        let cur = rows.firstIndex(where: { .move == rows.first(where: { .chinese == bestChinese })?.move }) ?? 0
+        var next = cur + delta
+        if next < 0 { next = 0 }
+        if next >= rows.count { next = rows.count - 1 }
+        pickRow(rows[next])
+    }
+    // MARK: - 编辑
 
     func tapSquare(_ sq: Int) {
         guard sq >= 0, sq < 90 else { return }
         guard let kind = pickedKind else {
             board[sq] = nil
-            fen = fenFromBoard()
             return
         }
-        let ch: Character = redAtBottom
+        board[sq] = redAtBottom
             ? Character(kind.rawValue.uppercased())
             : Character(kind.rawValue.lowercased())
-        board[sq] = ch
-        fen = fenFromBoard()
     }
 
-    func clearBoard() {
-        board = Array(repeating: nil, count: 90)
-        fen = fenFromBoard()
-        moveText = ""
-        scoreText = ""
-        fromSq = -1
-        toSq = -1
-    }
-
-    func resetToOpening() {
-        setBoardFromFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1")
-        moveText = ""
-    }
-
-    func toggleSide() {
+    func flip() {
         redAtBottom.toggle()
-        recompute()
     }
 
-    // MARK: - FEN 互转
+    func restart() {
+        setBoardFromFen("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1")
+        compute()
+    }
+
+    func copyFen() -> String {
+        UIPasteboard.general.string = fenFromBoard()
+        status = "局面已复制"
+        return fenFromBoard()
+    }
+
+    func pasteFen() {
+        if let s = UIPasteboard.general.string, s.contains("/") {
+            setBoardFromFen(s)
+            compute()
+            status = "已粘贴局面"
+        } else {
+            status = "剪贴板里没有局面字符串"
+        }
+    }
+
+    // MARK: - FEN
 
     func setBoardFromFen(_ s: String) {
         var b: [Character?] = Array(repeating: nil, count: 90)
         let layout = s.split(separator: " ").first.map(String.init) ?? s
-        let rows = layout.split(separator: "/", omittingEmptySubsequences: false)
-        if rows.count == 10 {
+        let rowsArr = layout.split(separator: "/", omittingEmptySubsequences: false)
+        if rowsArr.count == 10 {
             for r in 0..<10 {
                 var c = 0
-                for ch in rows[r] {
+                for ch in rowsArr[r] {
                     if let d = ch.wholeNumberValue, d >= 1, d <= 9 {
                         c += d
                     } else {
@@ -190,11 +282,10 @@ final class AppModel: ObservableObject {
             }
         }
         board = b
-        fen = s
     }
 
     func fenFromBoard() -> String {
-        var rows: [String] = []
+        var out: [String] = []
         for r in 0..<10 {
             var s = ""
             var empty = 0
@@ -207,8 +298,8 @@ final class AppModel: ObservableObject {
                 }
             }
             if empty > 0 { s += String(empty) }
-            rows.append(s)
+            out.append(s)
         }
-        return rows.joined(separator: "/")
+        return out.joined(separator: "/")
     }
 }

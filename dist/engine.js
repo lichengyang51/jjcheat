@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T03:51:47.308Z
+ *  生成时间: 2026-10-30T03:54:42.321Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -1001,6 +1001,7 @@ __modules["cst/search"] = function (module, exports, require) {
 const C = require('./constants');
 const { Position } = require('./position');
 const { evaluate, VALUE } = require('./eval');
+const NOTE = require('./notation');
 
 const INF = 32000;
 const MATE = 30000;
@@ -1430,6 +1431,79 @@ function scoreToWinrate(cpRed, sideToMove) {
 
 let _shared = null;
 /** 单例分析入口，方便 iOS JSC 里反复调用 */
+/**
+ * 多候选着法 —— 给界面上的「思考列表」用
+ *
+ * 对每个根着法各做一次快速搜索，按分数排序返回。
+ * 分数统一是「红方视角」（和 analyze 一致），胜率由 scoreToWinrate 给出。
+ *
+ * @param {string} fen
+ * @param {{timeMs:number, count:number, depth:number}} opts
+ * @returns {{bestmove:string, score:number, depth:number, nodes:number, ms:number,
+ *            rows:{move:string, chinese:string, score:number, winrate:number}[]}}
+ */
+function analyzeTop(fen, opts) {
+  if (!_shared) _shared = new Searcher();
+  const o = opts || {};
+  const timeMs = Math.max(120, o.timeMs || 1200);
+  const want = Math.min(12, Math.max(3, o.count || 8));
+  const quickDepth = Math.max(4, Math.min(10, o.depth || 7));
+
+  const pos = new Position(fen);
+  // 1) 先跑一次正常搜索，最佳着法和它的分数最准
+  const best = _shared.search(new Position(fen), Math.max(150, Math.floor(timeMs * 0.35)));
+
+  const rows = [];
+  const seen = {};
+  const roots = _shared._rootMoves(pos);
+
+  function push(m, score, depth) {
+    const ucci = C.mvToUcci(m);
+    if (seen[ucci]) return;
+    seen[ucci] = 1;
+    rows.push({
+      move: ucci,
+      chinese: NOTE.mvToChinese(pos.board, m, pos.side),
+      score: score,
+      winrate: scoreToWinrate(score, pos.side),
+      depth: depth || 0
+    });
+  }
+
+  // 2) 每个根着法各评估一次（时间平均分配）
+  const budget = Math.max(30, Math.floor((timeMs * 0.65) / Math.max(1, Math.min(roots.length, want * 2))));
+  const probe = new Searcher();
+  let nodes = best.nodes || 0;
+
+  for (let i = 0; i < roots.length && rows.length < want * 2; i++) {
+    const m = roots[i];
+    if (C.mvToUcci(m) === best.bestmove) { push(m, best.score, best.depth); continue; }
+    const p2 = new Position(fen);
+    if (!p2.makeMove || p2.makeMove(m) === false) continue;
+    const r = probe.search(p2, budget, quickDepth);
+    nodes += r.nodes || 0;
+    push(m, r.score, r.depth);
+  }
+
+  // 最佳着法万一没进列表，补在最前面
+  if (best.bestmove && !seen[best.bestmove]) {
+    rows.unshift({
+      move: best.bestmove,
+      chinese: NOTE.mvToChinese(pos.board, C.ucciToMv(best.bestmove), pos.side),
+      score: best.score, winrate: best.winrate, depth: best.depth
+    });
+  }
+
+  rows.sort((a, b) => b.score - a.score);
+  return {
+    bestmove: best.bestmove,
+    score: best.score,
+    depth: best.depth,
+    nodes: nodes,
+    ms: best.ms,
+    rows: rows.slice(0, want)
+  };
+}
 function analyze(fen, opts) {
   if (!_shared) _shared = new Searcher();
   const pos = new Position(fen);
@@ -1438,7 +1512,7 @@ function analyze(fen, opts) {
 }
 
 module.exports = {
-  Searcher, analyze, scoreToWinrate,
+  Searcher, analyze, analyzeTop, scoreToWinrate,
   MATE, MATE_BOUND, INF
 };
 
@@ -4376,6 +4450,17 @@ var JJEngine = {
   },
 
   /** 直接分析一个 FEN（不走视觉） */
+  /**
+   * 多候选着法：界面上的「思考列表」
+   * 返回 {bestmove, score, depth, nodes, ms, rows:[{move, chinese, score, winrate, depth}]}
+   */
+  analyzeTop: function (fen, opts) {
+    try {
+      return ENG.analyzeTop(fen, opts || {});
+    } catch (e) {
+      return { bestmove: '', score: 0, depth: 0, nodes: 0, ms: 0, rows: [] };
+    }
+  },
   analyzeFen: function (fen, timeMs) {
     var res = ENG.analyze(fen, { timeMs: timeMs || 1000 });
     var pos = new POS.Position(fen);
