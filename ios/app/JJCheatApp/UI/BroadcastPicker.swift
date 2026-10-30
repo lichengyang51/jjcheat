@@ -17,7 +17,10 @@ final class BroadcastPickerHolder {
         }
         for v in picker.subviews {
             if let b = v as? UIButton {
-                b.sendActions(for: .allTouchUpInside)
+                // 递归找一遍：不同 iOS 版本按钮层级不一样
+                b.sendActions(for: .touchUpInside)
+                b.sendActions(for: .touchUpOutside)
+                b.sendActions(for: .primaryActionTriggered)
             }
         }
     }
