@@ -233,7 +233,7 @@ final class FloatingPanelView: UIView {
 
     private func drawInfo(in r: CGRect) {
         let padX = r.width * 0.05
-        let availW = r.width - padX * 2
+        let availW = (r.width - padX * 2) * 0.96
         let slate = UIColor(red: 0.24, green: 0.31, blue: 0.42, alpha: 1)
         let blue = UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1)
         var y = r.minY + r.height * 0.05
@@ -284,7 +284,9 @@ final class FloatingPanelView: UIView {
         let h = r.height
         if !badge.isEmpty {
             // 库着 / 皮卡鱼：跟鹏飞 0:31 那一帧一样，只给一行大字「库: 兵七进一」
-            drawFitted(badge + ": " + moves.joined(separator: "  "), size: h * 0.20, color: slate)
+            // 字号上限压低一档（0.20 → 0.155）：宽度吃紧时 drawFitted 会自己缩，
+            // 但当初 0.20 在 7 个字的时候顶到了边框，用户截图里那行被切了。
+            drawFitted(badge + ": " + moves.joined(separator: "  "), size: h * 0.155, color: slate)
             return
         }
         drawFitted("深度: \(depth)", size: h * 0.125, color: slate)

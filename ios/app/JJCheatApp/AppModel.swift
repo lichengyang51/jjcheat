@@ -287,6 +287,9 @@ final class AppModel: ObservableObject {
             var pfResult: [String: Any]? = nil
             if PikafishBridge.available(),
                let pfMove = PikafishBridge.bestMove(full, movetimeMs: Int32(ms)) {
+                guard JJEngine.shared.isLegalMove(fen: full, ucci: pfMove) else {
+                    return
+                }
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: pfMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {
@@ -539,6 +542,12 @@ final class AppModel: ObservableObject {
 
     /// 把一步库着顶到界面（云库和本地库共用）
     private func applyBookMove(fen: String, ucci: String) {
+        // 先核合法：云库对「该谁走」的理解可能和我们不一致，
+        // 不过这一关就会出现「兵七退一」这种鬼话。
+        guard JJEngine.shared.isLegalMove(fen: fen, ucci: ucci) else {
+            status = "云库给的着法不合法，已丢弃"
+            return
+        }
         let info = JJEngine.shared.moveInfo(fen: fen, ucci: ucci)
         let zh = (info["chinese"] as? String) ?? ""
         guard !zh.isEmpty else { return }

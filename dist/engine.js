@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T07:44:18.115Z
+ *  生成时间: 2026-10-30T10:54:04.207Z
  *  模块数: 9
  * ============================================================ */
 (function (global) {
@@ -4518,6 +4518,28 @@ var JJEngine = {
       skipped: s.skipped || 0,
       cell: cell, radius: radius
     };
+  },
+
+  /**
+   * 这一步在这个局面里到底合不合法
+   *
+   * 为什么必须有：云库（chessdb）对「该谁走」的理解和我们不一定一致，
+   * 一旦 FEN 的走子方或朝向有偏差，它给的可能是对方的着法 ——
+   * 界面上就会出现「兵七退一」这种红兵往回走的鬼话。
+   * 这里直接用它自己的走法生成器核对一遍，不合法就丢掉，退回本机引擎。
+   */
+  isLegalMove: function (fen, ucci) {
+    try {
+      var pos = new POS.Position(fen);
+      var s = new ENG.Searcher();
+      var roots = s._rootMoves(pos);
+      for (var i = 0; i < roots.length; i++) {
+        if (C.mvToUcci(roots[i]) === String(ucci)) return 1;
+      }
+      return 0;
+    } catch (e) {
+      return 0;
+    }
   },
 
   /**

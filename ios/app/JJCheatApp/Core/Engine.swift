@@ -173,6 +173,17 @@ func process(pixels: Data, width: Int, height: Int, timeMs: Int, live: Bool = fa
         return out
     }
 
+    /// 这一步在这个局面里合不合法（云库给的着法必须先过这一关）
+    func isLegalMove(fen: String, ucci: String) -> Bool {
+        guard loadIfNeeded() else { return false }
+        var ok = false
+        queue.sync { () -> Void in
+            let res = self.callEngine("isLegalMove", args: [fen, ucci])
+            ok = (res?.toInt32() ?? 0) != 0
+        }
+        return ok
+    }
+
     func currentFen() -> String {
         guard loadIfNeeded() else { return "" }
         var s = ""

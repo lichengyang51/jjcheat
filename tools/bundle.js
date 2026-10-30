@@ -551,6 +551,28 @@ var JJEngine = {
   },
 
   /**
+   * 这一步在这个局面里到底合不合法
+   *
+   * 为什么必须有：云库（chessdb）对「该谁走」的理解和我们不一定一致，
+   * 一旦 FEN 的走子方或朝向有偏差，它给的可能是对方的着法 ——
+   * 界面上就会出现「兵七退一」这种红兵往回走的鬼话。
+   * 这里直接用它自己的走法生成器核对一遍，不合法就丢掉，退回本机引擎。
+   */
+  isLegalMove: function (fen, ucci) {
+    try {
+      var pos = new POS.Position(fen);
+      var s = new ENG.Searcher();
+      var roots = s._rootMoves(pos);
+      for (var i = 0; i < roots.length; i++) {
+        if (C.mvToUcci(roots[i]) === String(ucci)) return 1;
+      }
+      return 0;
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  /**
    * 把一步 UCCI 着法翻译成中文着法 + 起止格
    * （云库返回的是 move:c0e2 这种，界面上要「相三进五」）
    */
