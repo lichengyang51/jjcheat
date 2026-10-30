@@ -41,33 +41,6 @@ jobs:
           cp dist/engine.js ios/app/JJCheatApp/Resources/engine.js
           ls -la ios/app/JJCheatApp/Resources/
 
-      # 皮卡鱼：编成 dylib（运行时 dlopen），网络文件随包放 Resources
-      - name: 编译皮卡鱼 dylib
-        run: |
-          set -e
-          mkdir -p ios/native
-          if [ ! -d ios/native/pikafish ]; then
-            git clone --depth 1 https://github.com/official-pikafish/Pikafish.git ios/native/pikafish
-          fi
-          cd ios/native/pikafish/src
-          sh ../scripts/net.sh
-          ls -la pikafish.nnue
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          SRC="$(find . -name '*.cpp' -not -path './universal/*' -not -name '*amd64*' | tr '\n' ' ')"
-          xcrun --sdk iphoneos clang++ \
-            -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
-            -std=c++17 -O3 -fPIC -fno-exceptions -DNDEBUG -DIS_64BIT -march=armv8.2-a+dotprod \
-            -DUSE_POPCNT -DUSE_NEON=8 -DUSE_NEON_DOTPROD \
-            -install_name @rpath/libpikafish.dylib \
-            -I. $SRC ../../pf_bridge.cpp \
-            -o libpikafish.dylib -lc++ -lpthread
-          ls -la libpikafish.dylib
-          nm -gU libpikafish.dylib | grep pf_bestmove || true
-          # 网络文件放进 Resources（最终落在 .app 根目录）
-          mkdir -p ../../../app/JJCheatApp/Resources
-          cp pikafish.nnue ../../../app/JJCheatApp/Resources/pikafish.nnue
-          ls -la ../../../app/JJCheatApp/Resources/pikafish.nnue
-
       # 象眼（ElephantEye）：纯 C++ 经典引擎，不依赖数据文件，静态链接最稳。
       - name: 编译象眼静态库
         continue-on-error: true
@@ -148,17 +121,6 @@ jobs:
             CURRENT_PROJECT_VERSION="$BUILD_TAG" \
             MARKETING_VERSION="1.0.0" \
             build
-
-      - name: 把皮卡鱼 dylib 放进 App 的 Frameworks
-        run: |
-          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -name "JJCheatApp.app" -maxdepth 3 | head -1)
-          echo "APP=$APP"
-          mkdir -p "$APP/Frameworks"
-          cp ios/native/pikafish/src/libpikafish.dylib "$APP/Frameworks/" || true
-          ls -la "$APP/Frameworks/" || true
-          chmod +x "$APP/Frameworks/libpikafish.dylib" || true
-          codesign --force --sign - "$APP/Frameworks/libpikafish.dylib" || true
-          codesign -dv "$APP/Frameworks/libpikafish.dylib" 2>&1 | head -3 || true
 
       - name: 打未签名 ipa
         run: |

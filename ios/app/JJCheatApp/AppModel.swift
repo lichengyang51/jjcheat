@@ -77,8 +77,8 @@ final class AppModel: ObservableObject {
     @Published var pipActive = false
     /// 这一手是不是来自开局库（浮窗要显示「库: X」，跟鹏飞一样）
     @Published var isBookMove = false
-    /// 皮卡鱼有没有编进这个包
-    @Published var hasPikafish = false
+    /// 象眼引擎能不能用
+    @Published var hasEngine = false
     /// 引擎状态文字（显示在抽屉里，方便定位为什么不工作）
     @Published var engineStatus: String = "未尝试"
     /// 浮窗上一行大字的前缀（"库" / "象眼" / 空）
@@ -287,7 +287,7 @@ final class AppModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            // ★ 引擎优先级：象眼（纯 C++，最稳）→ 皮卡鱼（dylib，若加载成功）→ 本机 JS
+            // ★ 引擎优先级：象眼（纯 C++ 静态链接，最稳）→ 本机 JS 兜底
             var pfResult: [String: Any]? = nil
             if EleeyeBridge.available(),
                let eeMove = EleeyeBridge.bestMove(full, movetimeMs: Int32(ms)) {
@@ -393,7 +393,7 @@ final class AppModel: ObservableObject {
     /// 这一手库着是哪个局面下给的（局面变了就作废）
     private var bookPosKey = ""
 
-    /// 查云库（chessdb.cn）。鹏飞的开局库就是这个，背后是皮卡鱼那一档的引擎。
+    /// 查云库（chessdb.cn）。鹏飞的开局库就是这个，背后是很强的局面库。
     /// 命中就把「库: 着法」直接顶到界面上，比本机 JS 引擎强一大截，而且不会抖。
     private func applyCloudBook(_ fen: String) {
         let key = CloudBook.bookKey(fen)
@@ -445,7 +445,7 @@ final class AppModel: ObservableObject {
         }
         LiveEngine.shared.start()
         liveActive = true
-        // 皮卡鱼探活放后台：首次要初始化 NNUE 网络，会卡一两秒
+        // 引擎探活放后台：首次要初始化预生成表，会卡几百毫秒
         probeEngines()
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
@@ -463,20 +463,12 @@ final class AppModel: ObservableObject {
         if engineProbed && !force { return }
         engineProbed = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let eeOK = force ? EleeyeBridge.retry() : EleeyeBridge.available()
-            let eeMsg = EleeyeBridge.lastError()
-            let pfOK = force ? PikafishBridge.retryLoad() : PikafishBridge.available()
-            let pfMsg = PikafishBridge.lastError()
+            let ok = force ? EleeyeBridge.retry() : EleeyeBridge.available()
+            let msg = EleeyeBridge.lastError()
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.hasPikafish = eeOK || pfOK
-                if eeOK {
-                    self.engineStatus = pfOK ? "象眼已就绪（皮卡鱼也可用）" : "象眼已就绪"
-                } else if pfOK {
-                    self.engineStatus = "皮卡鱼已就绪（象眼不可用：" + eeMsg + "）"
-                } else {
-                    self.engineStatus = "都不可用 · 象眼：" + eeMsg + " · 皮卡鱼：" + pfMsg
-                }
+                self.hasEngine = ok
+                self.engineStatus = ok ? "象眼已就绪" : ("象眼不可用：" + msg)
             }
         }
     }

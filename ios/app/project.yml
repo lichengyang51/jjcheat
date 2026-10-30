@@ -58,18 +58,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         TARGETED_DEVICE_FAMILY: "1"
-        # Swift 要调 Objective-C 的 PikafishBridge，需要 bridging header
+        # Swift 要调 Objective-C 的 EleeyeBridge，需要 bridging header
         SWIFT_OBJC_BRIDGING_HEADER: JJCheatApp/Bridge/JJCheat-Bridging-Header.h
-        # ★ 皮卡鱼不静态链接，改运行时 dlopen（Frameworks/libpikafish.dylib）★
-        #
-        #   静态链接时它的全局 NNUE 对象会在 dyld 初始化阶段构造，
-        #   任何一点问题（找不到网络、文件系统调用抛异常、内存不够）
-        #   都表现为「点图标闪退」，整包废掉。改成 dlopen 后：
-        #   启动不碰它，加载失败就退回云库 + JS 引擎，App 永远能开。
-        # 皮卡鱼是 C++17 + 64 位 + NEON；这几个宏必须和静态库那边的编译选项一致，
-        # 否则头里的 Bitboard(128 位) 等类型对不上，直接编不过。
-        # 象眼（ElephantEye）源码在 CI 里 clone 到 ios/native/eleeye，
-        # 头文件路径给 app 用（ee_bridge.cpp 要 include 它的头）。
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/../native/eleeye"
           - "$(SRCROOT)/../native/eleeye/eleeye"
