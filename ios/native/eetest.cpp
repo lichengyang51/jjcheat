@@ -26,11 +26,11 @@ int main(int argc, char **argv) {
     Search.nBanMoves = 0;
     // 直接问一次开局库：文件能不能打开、这个局面有几条库着
     {
-        FILE *ft = fopen("../BOOK/BOOK.DAT", "rb");
+        FILE *ft = fopen("/tmp/eleeye/BOOK/BOOK.DAT", "rb");
         printf("[book] 打开文件=%d\n", (int) (ft != NULL));
         if (ft) fclose(ft);
         BookStruct bks[64];
-        int nb = GetBookMoves(Search.pos, "../BOOK/BOOK.DAT", bks);
+        int nb = GetBookMoves(Search.pos, "/tmp/eleeye/BOOK/BOOK.DAT", bks);
         printf("[book] 库着条数=%d\n", nb);
         for (int k = 0; k < nb && k < 4; k++) {
             uint32_t ms = MOVE_COORD(bks[k].wmv);
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
     Search.bDebug = false;
     Search.bUseHash = true;
     Search.bUseBook = true;
-    strcpy(Search.szBookFile, "../BOOK/BOOK.DAT");
+    strcpy(Search.szBookFile, "/tmp/eleeye/BOOK/BOOK.DAT");
     Search.bNullMove = true;
     Search.bKnowledge = true;
     Search.bIdle = false;
@@ -66,11 +66,11 @@ int main(int argc, char **argv) {
 
     // 直接问一次开局库：文件能不能打开、这个局面有几条库着
     {
-        FILE *ft = fopen("../BOOK/BOOK.DAT", "rb");
+        FILE *ft = fopen("/tmp/eleeye/BOOK/BOOK.DAT", "rb");
         printf("[book] 打开文件=%d\n", (int) (ft != NULL));
         if (ft) fclose(ft);
         BookStruct bks[64];
-        int nb = GetBookMoves(Search.pos, "../BOOK/BOOK.DAT", bks);
+        int nb = GetBookMoves(Search.pos, "/tmp/eleeye/BOOK/BOOK.DAT", bks);
         printf("[book] 库着条数=%d\n", nb);
         for (int k = 0; k < nb && k < 4; k++) {
             uint32_t ms = MOVE_COORD(bks[k].wmv);
