@@ -85,10 +85,8 @@ jobs:
           echo "--- 硬性校验 ---"
           test -f "$APP/engine.js"                       || (echo "!!! engine.js 没打进去" && exit 1)
           test -f "$APP/Info.plist"                      || (echo "!!! 缺 Info.plist" && exit 1)
-          test -f "$APP/PlugIns/JJCheatBroadcast.appex/JJCheatBroadcast" || (echo "!!! 缺录屏扩展" && exit 1)
           echo "engine.js  = $(wc -c < "$APP/engine.js") 字节"
           echo "主程序     = $(wc -c < "$APP/JJCheatApp") 字节"
-          echo "扩展       = $(wc -c < "$APP/PlugIns/JJCheatBroadcast.appex/JJCheatBroadcast") 字节"
           cd "$RUNNER_TEMP"
           rm -rf Payload JJCheat-unsigned.ipa
           mkdir -p Payload

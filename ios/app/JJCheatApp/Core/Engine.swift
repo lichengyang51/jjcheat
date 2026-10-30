@@ -123,6 +123,19 @@ final class JJEngine {
 
     // MARK: - 主处理
 
+    /// 直接分析一个 FEN（不经过画面识别）。
+    /// 手动改完棋子之后重新算棋就走这里。
+    /// 注意：JS 端签名是 analyzeFen(fen, timeMs)，第二个参数是数字，不是 options 对象。
+    func analyzeFen(fen: String, timeMs: Int) -> [String: Any]? {
+        guard loadIfNeeded() else { return nil }
+        var out: [String: Any]?
+        queue.sync { () -> Void in
+            let res = self.callEngine("analyzeFen", args: [fen, timeMs])
+            out = Self.dict(res)
+        }
+        return out
+    }
+
     func process(pixels: Data, width: Int, height: Int, timeMs: Int) -> [String: Any]? {
         guard loadIfNeeded() else { return nil }
         var out: [String: Any]?
