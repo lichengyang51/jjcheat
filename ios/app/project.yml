@@ -60,13 +60,16 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         # Swift 要调 Objective-C 的 PikafishBridge，需要 bridging header
         SWIFT_OBJC_BRIDGING_HEADER: JJCheatApp/Bridge/JJCheat-Bridging-Header.h
-        # 皮卡鱼源码在 CI 里 clone 到 ios/native/pikafish（本地没有时只是编成空实现）
+        # 皮卡鱼源码在 CI 里 clone 到 ios/native/pikafish（源代码不在时桥接层编成空实现）
         HEADER_SEARCH_PATHS:
           - "$(SRCROOT)/native/pikafish/src"
-        # 静态库由 CI 编出来；万一没编成会放一个空库，链接不会失败
-        OTHER_LDFLAGS:
-          - "-force_load"
-          - "$(SRCROOT)/native/pikafish/src/libpikafish.a"
+        # ★ 暂时不链接皮卡鱼静态库 ★
+        #
+        #   它的 NNUE 网络是全局对象（namespace 级 Network），dyld 初始化阶段
+        #   就要把几百 MB 的网络解压进内存，iOS 上进程直接被杀 —— 表现就是
+        #   「点开图标闪退」。要接它必须改成运行时按需加载（dlopen / 延迟初始化），
+        #   那是单独一步。没有这段 -force_load，pf_bridge.cpp 自动走空实现，
+        #   App 照旧用云库 + 本机 JS 引擎，绝不会因为引擎缺席而闪退。
         # 皮卡鱼是 C++17 + 64 位 + NEON；这几个宏必须和静态库那边的编译选项一致，
         # 否则头里的 Bitboard(128 位) 等类型对不上，直接编不过。
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"

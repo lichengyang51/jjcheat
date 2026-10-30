@@ -41,31 +41,8 @@ jobs:
           cp dist/engine.js ios/app/JJCheatApp/Resources/engine.js
           ls -la ios/app/JJCheatApp/Resources/
 
-      # 皮卡鱼（Pikafish，Stockfish 的中国象棋版，NNUE）编成 iOS arm64 静态库。
-      # 这一步失败不影响出包：会放一个空库进去，App 里自动退回 JS 引擎 + 云库。
-      - name: 编译皮卡鱼静态库（失败不阻断出包）
-        continue-on-error: true
-        run: |
-          set -e
-          mkdir -p ios/app/native
-          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git ios/app/native/pikafish || exit 0
-          cd ios/app/native/pikafish/src
-          sh ../scripts/net.sh || true
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          make -j4 build ARCH=apple-silicon COMP=clang \
-            EXTRACXXFLAGS="-isysroot $SDK -mios-version-min=16.0 -fPIC" || true
-          FILES=$(find . -name '*.o')
-          if [ -n "$FILES" ]; then xcrun libtool -static -o libpikafish.a $FILES || true; fi
-
-      - name: 皮卡鱼没编成时放个空库（保证链接不失败）
-        run: |
-          LIB=ios/app/native/pikafish/src/libpikafish.a
-          if [ ! -f "$LIB" ]; then
-            echo "皮卡鱼没编成，放空库"
-            mkdir -p "$(dirname "$LIB")"
-            xcrun libtool -static -o "$LIB" /dev/null 2>/dev/null || ar rcs "$LIB"
-          fi
-          ls -la "$LIB"
+      # 皮卡鱼静态库这一步先停用：它的全局 NNUE 对象会让 App 启动即闪退，
+      # 要接必须改成运行时按需加载（见 project.yml 里的说明）。
 
       - name: 生成 Xcode 工程
         run: |
