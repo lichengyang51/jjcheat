@@ -162,6 +162,17 @@ func process(pixels: Data, width: Int, height: Int, timeMs: Int, live: Bool = fa
         return out
     }
 
+    /// UCCI 着法 → 中文着法 + 起止格（云库返回的 move:xxxx 用它翻译）
+    func moveInfo(fen: String, ucci: String) -> [String: Any] {
+        guard loadIfNeeded() else { return [:] }
+        var out: [String: Any] = [:]
+        queue.sync { () -> Void in
+            let res = self.callEngine("moveInfo", args: [fen, ucci])
+            out = Self.dict(res) ?? [:]
+        }
+        return out
+    }
+
     func currentFen() -> String {
         guard loadIfNeeded() else { return "" }
         var s = ""

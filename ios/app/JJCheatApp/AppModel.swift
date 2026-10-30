@@ -270,6 +270,7 @@ final class AppModel: ObservableObject {
         // 浮窗会先跳成「正在识别」再变回着法，看着就是一秒三跳。
         if limitSeconds == nil { rows = [] }
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
+        applyCloudBook(full)
         let budget = limitSeconds ?? thinkSeconds
         let ms = Int(max(0.4, budget) * 1000)
         let t0 = Date()
@@ -343,6 +344,33 @@ final class AppModel: ObservableObject {
 
     // MARK: - 画中画浮窗（鹏飞式小窗）
 
+    private var lastCloudKey = ""
+
+    /// 查云库（chessdb.cn）。鹏飞的开局库就是这个，背后是皮卡鱼那一档的引擎。
+    /// 命中就把「库: 着法」直接顶到界面上，比本机 JS 引擎强一大截，而且不会抖。
+    private func applyCloudBook(_ fen: String) {
+        let key = CloudBook.bookKey(fen)
+        guard !key.isEmpty, key != lastCloudKey else { return }
+        lastCloudKey = key
+        CloudBook.shared.query(fen: fen) { [weak self] moves in
+            guard let self, let first = moves.first else { return }
+            DispatchQueue.main.async {
+                let info = JJEngine.shared.moveInfo(fen: fen, ucci: first)
+                let zh = (info["chinese"] as? String) ?? ""
+                guard !zh.isEmpty else { return }
+                self.isBookMove = true
+                self.bestChinese = zh
+                self.fromSq = (info["from"] as? Int) ?? -1
+                self.toSq = (info["to"] as? Int) ?? -1
+                self.scoreValue = 0
+                self.depth = 0
+                self.rows = [CandidateRow(chinese: zh, move: first, score: 0, winrate: 50, depth: 0)]
+                self.status = "云库命中 · " + zh
+                self.refreshPanel()
+            }
+        }
+    }
+
     private var lastLiveAnalyze = Date.distantPast
     /// 浮窗上一次显示过的候选着法（实时模式下用来防止来回跳）
     private var lastPanelMoves: [String] = []
@@ -406,7 +434,27 @@ final class AppModel: ObservableObject {
         redAtBottom = ((res["mySide"] as? String) ?? "red") == "red"
         pipCells = JJEngine.int(res, "pipOverlap", 0)
 
-        let move = JJEngine.str(res, "suggestChinese", "")
+        // 云库：查过的局面直接给答案；没查过就发起查询（算棋照常进行，回来再顶掉）
+        if let hit = CloudBook.shared.cached(fen: engineFen), let first = hit.first {
+            let info = JJEngine.shared.moveInfo(fen: engineFen, ucci: first)
+            let zh = (info["chinese"] as? String) ?? ""
+            if !zh.isEmpty {
+                isBookMove = true
+                bestChinese = zh
+                fromSq = (info["from"] as? Int) ?? -1
+                toSq = (info["to"] as? Int) ?? -1
+                rows = [CandidateRow(chinese: zh, move: first, score: 0, winrate: 50, depth: 0)]
+                scoreValue = 0
+                depth = 0
+                status = "云库命中 · \(zh)"
+                refreshPanel()
+                return
+            }
+        }
+        applyCloudBook(engineFen)
+
+        let move = JJEngine.str(res, "suggestChinese", "");
+        isBookMove = false
         if !move.isEmpty { bestChinese = move }
         fromSq = JJEngine.int(res, "from", -1)
         toSq = JJEngine.int(res, "to", -1)

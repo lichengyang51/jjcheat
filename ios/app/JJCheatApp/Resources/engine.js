@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T07:30:23.841Z
+ *  生成时间: 2026-10-30T07:32:51.230Z
  *  模块数: 9
  * ============================================================ */
 (function (global) {
@@ -4518,6 +4518,25 @@ var JJEngine = {
       skipped: s.skipped || 0,
       cell: cell, radius: radius
     };
+  },
+
+  /**
+   * 把一步 UCCI 着法翻译成中文着法 + 起止格
+   * （云库返回的是 move:c0e2 这种，界面上要「相三进五」）
+   */
+  moveInfo: function (fen, ucci) {
+    try {
+      var pos = new POS.Position(fen);
+      var mv = C.ucciToMv(ucci);
+      if (!mv) return { chinese: '', from: -1, to: -1 };
+      return {
+        chinese: NOTE.mvToChinese(pos.board, mv, pos.side),
+        from: C.mvFrom(mv),
+        to: C.mvTo(mv)
+      };
+    } catch (e) {
+      return { chinese: '', from: -1, to: -1 };
+    }
   },
 
   /** 调试：切换兵种打分方式 'dot' | 'f1' | 'mass' | 'mass:0.5'（后者同时设惩罚系数） */
