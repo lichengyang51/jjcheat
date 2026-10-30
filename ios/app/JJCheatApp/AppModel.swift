@@ -55,6 +55,8 @@ final class AppModel: ObservableObject {
     @Published var showSettings = false
     @Published var tabIndex: Int = 0            // 0 思考 / 1 开局库 / 2 用时
     @Published var pickedKind: PieceKind? = nil
+    /// 用户选的那张图（显示出来，选错图能当场看见）
+    @Published var pickedImage: UIImage?
     @Published var editMode = false
     @Published var pasteAlert = false
     @Published var pasteText = ""
@@ -84,6 +86,7 @@ final class AppModel: ObservableObject {
     // MARK: - 识别
 
     func analyze(image: UIImage) {
+        pickedImage = image
         thinking = true
         status = "识别中…（这步要几秒，别退出）"
 
@@ -127,7 +130,7 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 self.thinking = false
                 guard !fenStr.isEmpty else {
-                    self.status = "没认出来，可手动摆子后点「立刻出招」"
+                    self.status = "没认出盘面（棋盘定位失败）。可「编辑局面」摆子后点「立刻出招」"
                     return
                 }
                 self.setBoardFromFen(fenStr)

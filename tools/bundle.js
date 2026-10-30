@@ -752,12 +752,18 @@ var JJEngine = {
       // 跟你眼睛看到的完全一致。算棋用的是 directFen（内部坐标，红永远在下）。
       out.fen = (session.lastRawFen || session.lastBoardFen) + ' ' +
         (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
+      out.recognized = 1;
       out.engineFen = directFen;
       out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
     } else {
       // 还在等识别稳定，沿用上一次的结论
-      out.fen = session.lastRawFen || session.lastBoardFen || session.tracker.fen;
+      // 【别再拿「开局盘面」冒充识别结果】
+      //   以前这里兜底成 session.tracker.fen（= 开局 FEN），
+      //   于是识别彻底失败时界面会显示一盘完整的开局、还说「识别完成 · 32 个子」。
+      //   现在没有识别结果就返回空串，让上层明确报「没认出来」。
+      out.fen = session.lastRawFen || session.lastBoardFen || '';
+      out.recognized = out.fen ? 1 : 0;
       if (isStable) {
         var mv2 = session.tracker.tryAdvance(grid, 1);
         if (mv2 && !mv2.fail) {

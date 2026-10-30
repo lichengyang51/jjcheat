@@ -32,6 +32,22 @@ struct ContentView: View {
                 .aspectRatio(8.0 / 9.0, contentMode: .fit)
                 .padding(.horizontal, 4)
 
+                // 你选的那张图（缩略）：选错图当场就能看出来
+                if let img = model.pickedImage {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 54)
+                            .cornerRadius(4)
+                        Text("上面这张就是刚识别的图")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                }
                 // 识别/操作状态（显眼一点，别缩在页面最底下）
                 HStack(spacing: 8) {
                     Circle()
