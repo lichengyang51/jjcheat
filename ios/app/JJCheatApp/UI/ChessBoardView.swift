@@ -49,8 +49,10 @@ struct ChessBoardView: View {
                             let col = Int(round((loc.x - ox) / cell))
                             let drow = Int(round((loc.y - oy) / cell))
                             guard col >= 0, col < 9, drow >= 0, drow < 10 else { return }
+                            // 和 center() 用同一套换算：执黑时行列都反向
                             let row = redAtBottom ? drow : 9 - drow
-                            onTap(row * 9 + col)
+                            let cc = redAtBottom ? col : 8 - col
+                            onTap(row * 9 + cc)
                         }
                 }
             }
@@ -183,6 +185,11 @@ struct ChessBoardView: View {
 
     private func center(_ sq: Int, _ cell: CGFloat, _ ox: CGFloat, _ oy: CGFloat) -> CGPoint {
         let r = sq / 9, c = sq % 9
-        return CGPoint(x: ox + CGFloat(c) * cell, y: oy + CGFloat(disp(r)) * cell)
+        // 执黑时这张小棋盘是「从对面看」——整盘旋转 180 度，行和列同时反向。
+        // 原来只翻行，画出来是一张左右镜像的盘：棋子位置、蓝色箭头全在镜子里的那一格，
+        // 看着就是「箭头指错了」。用户截图「车六退二 你执红」那个 HUD 就是这个问题。
+        let dr = redAtBottom ? r : 9 - r
+        let dc = redAtBottom ? c : 8 - c
+        return CGPoint(x: ox + CGFloat(dc) * cell, y: oy + CGFloat(dr) * cell)
     }
 }

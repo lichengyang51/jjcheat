@@ -157,14 +157,26 @@ final class AppModel: ObservableObject {
                     self.status = "没认出盘面（棋盘定位失败）。可「编辑局面」摆子后点「立刻出招」"
                     return
                 }
-                self.setBoardFromFen(fenStr)
+                // ★ 盘面一律用「引擎坐标」（红永远在下），不要用屏幕坐标
+                //
+                //   之前这里灌的是屏幕原样的 FEN，而棋子绘制/箭头/「立刻出招」
+                //   各自按不同方式换算，执黑时三套坐标系对不上：
+                //   小棋盘画成左右镜像、蓝色箭头指到镜子里的格子、
+                //   点「立刻出招」算的是一个镜像假局面。
+                //   现在统一成引擎坐标：board[] 就是红在下、棋盘旋转 180 度后的局面，
+                //   画的时候按 redAtBottom 再转回去（见 ChessBoardView.center），
+                //   fenFromBoard() 出来的就是能直接喂给引擎的 FEN。
+                let engineFen = (res?["engineFen"] as? String) ?? fenStr
+                self.setBoardFromFen(engineFen)
                 self.redAtBottom = (mySide == "red")
                 if let cornersArr = res?["corners"] as? [[Double]] {
                     self.evCorners = cornersArr
                 } else {
                     self.evCorners = corners
                 }
-                self.evChars = self.board.map { piece in piece ?? Character(".") }
+                // 留证页用的是「截图原样」的格子（因为它裁的就是截图里的像素），
+                // 所以这里必须用屏幕坐标解析一份，不能拿引擎坐标的 board 去对。
+                self.evChars = Self.parseFenChars(fenStr)
                 self.evConf = conf90
                 self.evTops = tops90
                 self.evImgW = rgba.width
@@ -328,6 +340,11 @@ final class AppModel: ObservableObject {
     // MARK: - FEN
 
     func setBoardFromFen(_ s: String) {
+        board = Self.parseFenChars(s)
+    }
+
+    /// 把 FEN 的棋盘段解析成 90 格字符（不给走子方/回合信息）
+    static func parseFenChars(_ s: String) -> [Character?] {
         var b: [Character?] = Array(repeating: nil, count: 90)
         let layout = s.split(separator: " ").first.map(String.init) ?? s
         let rowsArr = layout.split(separator: "/", omittingEmptySubsequences: false)
@@ -344,7 +361,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        board = b
+        return b
     }
 
     func fenFromBoard() -> String {

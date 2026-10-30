@@ -491,7 +491,16 @@ function analyzeTop(fen, opts) {
     if (!p2.makeMove || p2.makeMove(m) === false) continue;
     const r = probe.search(p2, budget, quickDepth);
     nodes += r.nodes || 0;
-    push(m, r.score, r.depth);
+    // ★ 必须取反
+    //
+    //   probe.search 搜的是「我走完这一步之后」的局面，此时轮到对手走，
+    //   所以 r.score 是对手的视角：+5 表示对手有 +5，也就是我这步是臭棋。
+    //   原来直接把 r.score 当「这步有多好」塞进表格，于是：
+    //     ① 好棋显示成负数、坏棋显示成正数，候选表整个反向；
+    //     ② 排序按这些混了符号的分数，「最佳」标在了一手烂棋上；
+    //     ③ 胜率也跟着错（用户截图里 0.9953 那行其实是让自己亏 9 分的着法）。
+    //   最佳着法那一行用的是 best.score（我方视角），所以这里也要统一到我方视角。
+    push(m, -r.score, r.depth);
   }
 
   // 最佳着法万一没进列表，补在最前面
