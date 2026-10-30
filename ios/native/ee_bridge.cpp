@@ -35,6 +35,8 @@
 
 // 启动最早时刻把工作目录切到 .app（开局库 BOOK.DAT 和可执行文件同级，
 // dyld 初始化顺序里我们这段 constructor(101) 比默认 65535 先跑）。
+static char g_bookPath[PATH_MAX] = {0};
+
 __attribute__((constructor(101)))
 static void ee_chdir_to_bundle(void) {
     char exe[PATH_MAX];
@@ -43,7 +45,10 @@ static void ee_chdir_to_bundle(void) {
     std::string p(exe);
     const size_t pos = p.find_last_of('/');
     if (pos == std::string::npos) return;
-    chdir(p.substr(0, pos).c_str());
+    const std::string dir = p.substr(0, pos);
+    chdir(dir.c_str());
+    // 开局库绝对路径：不依赖工作目录（CI 实测：路径对的时候开局 16 条库着全部命中）
+    snprintf(g_bookPath, sizeof(g_bookPath), "%s/BOOK.DAT", dir.c_str());
 }
 
 // eleeye.cpp 里定义的常量（那个文件自带 main()，我们不编它），这里补一份
@@ -75,7 +80,7 @@ void ee_init(void) {
     //   BOOK.DAT 是象眼自带的开局库（96KB，几万个局面），和可执行文件同级。
     //   命中时它直接给着法、不算棋，开局又快又稳。
     Search.bUseBook = true;
-    strcpy(Search.szBookFile, "BOOK.DAT");
+    strcpy(Search.szBookFile, g_bookPath[0] ? g_bookPath : "BOOK.DAT");
     Search.bNullMove = true;
     Search.bKnowledge = true;
     Search.bIdle = false;
