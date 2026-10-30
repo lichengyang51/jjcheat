@@ -58,6 +58,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         TARGETED_DEVICE_FAMILY: "1"
+        # Swift 要调 Objective-C 的 PikafishBridge，需要 bridging header
+        SWIFT_OBJC_BRIDGING_HEADER: JJCheatApp/Bridge/JJCheat-Bridging-Header.h
+        # 皮卡鱼源码在 CI 里 clone 到 ios/native/pikafish（本地没有时只是编成空实现）
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/native/pikafish/src"
+        # 静态库由 CI 编出来；万一没编成会放一个空库，链接不会失败
+        OTHER_LDFLAGS:
+          - "-force_load"
+          - "$(SRCROOT)/native/pikafish/src/libpikafish.a"
     dependencies:
       - target: JJCheatBroadcast
         embed: true

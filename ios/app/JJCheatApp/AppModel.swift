@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
     @Published var pipActive = false
     /// 这一手是不是来自开局库（浮窗要显示「库: X」，跟鹏飞一样）
     @Published var isBookMove = false
+    /// 皮卡鱼有没有编进这个包
+    @Published var hasPikafish = false
+    /// 浮窗上一行大字的前缀（"库" / "皮卡鱼" / 空）
+    private var panelBadge: String = ""
     /// 当前局面分数（数值，浮窗要显示「分数: N」）
     @Published var scoreValue: Int = 0
     /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
@@ -277,7 +281,27 @@ final class AppModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let res = JJEngine.shared.analyzeTop(fen: full, timeMs: ms, count: 8)
+            // ★ 皮卡鱼优先：它比本机 JS 引擎高一千多分
+            var pfResult: [String: Any]? = nil
+            if PikafishBridge.available(),
+               let pfMove = PikafishBridge.bestMoveForFen(full, movetimeMs: ms) {
+                let info = JJEngine.shared.moveInfo(fen: full, ucci: pfMove)
+                let zh = (info["chinese"] as? String) ?? ""
+                if !zh.isEmpty {
+                    pfResult = [
+                        "bestmove": pfMove,
+                        "score": 0,
+                        "depth": 0,
+                        "nodes": 0,
+                        "ms": ms,
+                        "rows": [[
+                            "move": pfMove, "chinese": zh, "score": 0,
+                            "winrate": 0.5, "depth": 0
+                        ]]
+                    ]
+                }
+            }
+            let res = pfResult ?? JJEngine.shared.analyzeTop(fen: full, timeMs: ms, count: 8)
             let cost = Date().timeIntervalSince(t0)
             DispatchQueue.main.async {
                 self.thinking = false
@@ -303,7 +327,9 @@ final class AppModel: ObservableObject {
                 }
                 self.winratePct = JJEngine.double(res, "winrate", 50)
                 self.scoreValue = sc
+                let fromPikafish = (res?["bestmove"] as? String) != nil && (res?["nodes"] as? Int) == 0
                 self.isBookMove = JJEngine.int(res, "book", 0) == 1
+                self.panelBadge = self.isBookMove ? "库" : (fromPikafish ? "皮卡鱼" : "")
                 if self.isBookMove { self.bookPosKey = self.posKey() } else { self.bookPosKey = "" }
 
                 var list: [CandidateRow] = []
@@ -409,6 +435,7 @@ final class AppModel: ObservableObject {
         }
         LiveEngine.shared.start()
         liveActive = true
+        hasPikafish = PikafishBridge.available()
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
         // 先让浮窗动画起来，再弹录屏面板 —— 两个系统弹窗挤在同一帧会互相打断
@@ -492,6 +519,7 @@ final class AppModel: ObservableObject {
         let zh = (info["chinese"] as? String) ?? ""
         guard !zh.isEmpty else { return }
         isBookMove = true
+        panelBadge = "库"
         bookPosKey = posKey()
         bestChinese = zh
         fromSq = (info["from"] as? Int) ?? -1
@@ -553,7 +581,7 @@ final class AppModel: ObservableObject {
             score: scoreValue,
             moves: mv,
             hint: hint,
-            isBook: isBookMove
+            badge: panelBadge
         )
     }
 

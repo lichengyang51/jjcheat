@@ -72,7 +72,7 @@ final class PiPController: NSObject {
     /// 推内容进浮窗（版式固定成鹏飞那样：小棋盘 + 深度/用时/分数/候选着法）
     func update(fen: String, arrowFrom: Int, arrowTo: Int,
                 depth: Int, secs: Double, score: Int, moves: [String], hint: String,
-                isBook: Bool = false) {
+                badge: String = "") {
         panel.apply(fen: fen,
                     arrowFrom: arrowFrom,
                     arrowTo: arrowTo,
@@ -81,7 +81,7 @@ final class PiPController: NSObject {
                     score: score,
                     moves: moves,
                     hint: hint,
-                    isBook: isBook)
+                    badge: badge)
     }
 
     /// 还没识别出局面时的「正在识别」状态

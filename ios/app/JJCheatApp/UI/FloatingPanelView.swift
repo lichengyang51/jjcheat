@@ -35,7 +35,7 @@ final class FloatingPanelView: UIView {
     private var secs: Double = 0
     private var score: Int = 0
     private var moves: [String] = []
-    private var isBook = false
+    private var badge = ""
     private var busyText: String = "正在识别"
     private var warnText: String = "注意不要遮挡被连线棋盘"
 
@@ -50,8 +50,8 @@ final class FloatingPanelView: UIView {
 
     /// 推一帧结论进浮窗
     func apply(fen: String, arrowFrom: Int, arrowTo: Int,
-               depth: Int, secs: Double, score: Int, moves: [String], hint: String, isBook: Bool = false) {
-        self.isBook = isBook
+               depth: Int, secs: Double, score: Int, moves: [String], hint: String, badge: String = "") {
+        self.badge = badge
         board = Self.parseFen(fen)
         self.arrowFrom = arrowFrom
         self.arrowTo = arrowTo
@@ -282,9 +282,9 @@ final class FloatingPanelView: UIView {
         }
 
         let h = r.height
-        if isBook {
-            // 开局库命中：跟鹏飞 0:31 那一帧一样，只给一行大字「库: 兵七进一」
-            drawFitted("库: " + moves.joined(separator: "  "), size: h * 0.20, color: slate)
+        if !badge.isEmpty {
+            // 库着 / 皮卡鱼：跟鹏飞 0:31 那一帧一样，只给一行大字「库: 兵七进一」
+            drawFitted(badge + ": " + moves.joined(separator: "  "), size: h * 0.20, color: slate)
             return
         }
         drawFitted("深度: \(depth)", size: h * 0.125, color: slate)
