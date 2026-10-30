@@ -81,8 +81,10 @@ final class AppModel: ObservableObject {
     @Published var hasPikafish = false
     /// 引擎状态文字（显示在抽屉里，方便定位为什么不工作）
     @Published var engineStatus: String = "未尝试"
-    /// 浮窗上一行大字的前缀（"库" / "皮卡鱼" / 空）
+    /// 浮窗上一行大字的前缀（"库" / "象眼" / 空）
     private var panelBadge: String = ""
+    /// 这一手是哪个引擎给的
+    private var engineUsed: String = ""
     /// 当前局面分数（数值，浮窗要显示「分数: N」）
     @Published var scoreValue: Int = 0
     /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
@@ -276,6 +278,7 @@ final class AppModel: ObservableObject {
         // 浮窗会先跳成「正在识别」再变回着法，看着就是一秒三跳。
         if limitSeconds == nil { rows = [] }
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
+        engineUsed = ""
         applyCloudBook(full)
         let budget = limitSeconds ?? thinkSeconds
         let ms = Int(max(0.4, budget) * 1000)
@@ -290,6 +293,7 @@ final class AppModel: ObservableObject {
                 guard JJEngine.shared.isLegalMove(fen: full, ucci: eeMove) else {
                     return
                 }
+                self.engineUsed = "象眼"
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: eeMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {
@@ -332,9 +336,9 @@ final class AppModel: ObservableObject {
                 }
                 self.winratePct = JJEngine.double(res, "winrate", 50)
                 self.scoreValue = sc
-                let fromPikafish = (res?["bestmove"] as? String) != nil && (res?["nodes"] as? Int) == 0
+                let fromNative = (res?["bestmove"] as? String) != nil && (res?["nodes"] as? Int) == 0
                 self.isBookMove = JJEngine.int(res, "book", 0) == 1
-                self.panelBadge = self.isBookMove ? "库" : (fromPikafish ? "皮卡鱼" : "")
+                self.panelBadge = self.isBookMove ? "库" : (fromNative ? self.engineUsed : "")
                 if self.isBookMove { self.bookPosKey = self.posKey() } else { self.bookPosKey = "" }
 
                 var list: [CandidateRow] = []
