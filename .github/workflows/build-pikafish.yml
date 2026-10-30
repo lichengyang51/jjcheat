@@ -36,8 +36,8 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "SDK=$SDK"
           cd pf/src
-          make -j4 build ARCH=armv8 COMP=clang \
-            EXTRACXXFLAGS="-arch arm64 -isysroot $SDK -mios-version-min=16.0 -fPIC -DIS_64BIT" \
+          make -j4 build ARCH=apple-silicon COMP=clang \
+            EXTRACXXFLAGS="-isysroot $SDK -mios-version-min=16.0 -fPIC" \
             2>&1 | tail -40
           set +x
           echo "=== 目标文件 ==="
