@@ -88,7 +88,7 @@ int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
 
     // 注意：nDepth 传 0 会被它当成「只做静态搜索」直接返回 nobestmove，
     // 必须给一个真正的深度上限，靠 nMaxTimer 到点自动停。
-    SearchMain(LIMIT_DEPTH);
+    SearchMain(64);   // 深度上限 64,靠 nMaxTimer 到点停
 
     fflush(stdout);
     dup2(saved, 1);

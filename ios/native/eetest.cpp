@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
     if (!tmp) { printf("tmpfile 失败\n"); return 1; }
     dup2(fileno(tmp), 1);
 
-    SearchMain(LIMIT_DEPTH);
+    SearchMain(64);   // 深度上限 64,靠 nMaxTimer 到点停
 
     fflush(stdout);
     dup2(saved, 1);
