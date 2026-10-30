@@ -605,6 +605,19 @@ var JJEngine = {
     var mergedCodes = new Array(90);
     var lowConfCount = 0;
     for (var sm = 0; sm < 90; sm++) {
+      // ★ 被浮窗盖住的格子：整格作废，保留上一帧的值
+      //
+      //   浮窗会一起被截进截图里，那几格采到的其实是浮窗画面（我们自己的小棋盘），
+      //   拿去识别就会凭空多出棋子、还把网格拉偏 —— 历史上这就是「浮窗挡棋盘」翻车的根源。
+      //   现在浮窗自带一圈洋红边框（App 端画的），引擎按边框精确算出盖住了哪几格，
+      //   这几格保留上一帧的值；没有上一帧就留空（宁可少一个子，也不要凭空多一个）。
+      if (session.recognizer && session.recognizer.occluded && session.recognizer.occluded[sm]) {
+        mergedCodes[sm] = (prevCodes && prevCodes[sm] !== undefined && prevCodes[sm] !== null)
+          ? prevCodes[sm] : 0;
+        session.lowStreak = session.lowStreak || new Array(90).fill(0);
+        session.lowStreak[sm] = 0;
+        continue;
+      }
       var raw = cls.codes ? cls.codes[sm] : 0;
       var conf = cls.conf ? (cls.conf[sm] || 0) : 1;
       var st = stats[sm];
@@ -724,10 +737,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 遮挡提示已删除：真机抓屏下「暖色无墨」这个判据连空棋盘格都会命中，
-      // 会导致半盘被抹空 + 假报「挡住」。恒为 0，App 不再显示该提示。
-      pipOverlap: 0,
-      hiddenCells: 0
+      // 浮窗盖住了几格（浮窗自带洋红边框，引擎按边框算出来的，不是猜颜色）
+      pipOverlap: (session.recognizer && session.recognizer.occludedCount) || 0,
+      pipRect: (session.recognizer && session.recognizer.pipRect) || null,
+      hiddenCells: (session.recognizer && session.recognizer.occludedCount) || 0
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN

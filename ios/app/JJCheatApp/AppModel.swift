@@ -73,6 +73,10 @@ final class AppModel: ObservableObject {
 
     /// 思考时长（秒），对应设置页的「局时」
     @Published var thinkSeconds: Double = 3.0
+    /// 画中画浮窗是否开着
+    @Published var pipActive = false
+    /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
+    @Published var pipCells: Int = 0
     /// 编辑模式：打开后点棋盘才会改子，平时点棋盘不动
 
 
@@ -227,6 +231,8 @@ final class AppModel: ObservableObject {
                 let engineFen = (res?["engineFen"] as? String) ?? fenStr
                 self.setBoardFromFen(engineFen)
                 self.redAtBottom = (mySide == "red")
+                self.pipCells = JJEngine.int(res, "pipOverlap", 0)
+                self.refreshPanel()
                 if let cornersArr = res?["corners"] as? [[Double]] {
                     self.evCorners = cornersArr
                 } else {
@@ -300,8 +306,88 @@ final class AppModel: ObservableObject {
                     self.fromSq = -1
                     self.toSq = -1
                 }
+                self.refreshPanel()
             }
         }
+    }
+
+    // MARK: - 画中画浮窗（鹏飞式小窗）
+
+    private var pipAnchor: UIView?
+
+    func setPipAnchor(_ v: UIView) { pipAnchor = v }
+
+    /// 开/关浮窗
+    func toggleFloatingPanel() {
+        if PiPController.shared.isActive {
+            PiPController.shared.stop()
+            pipActive = false
+            status = "浮窗已关"
+            return
+        }
+        let anchor: UIView? = pipAnchor ?? UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController?.view }
+            .first
+        guard let anchor else {
+            status = "拿不到挂浮窗的视图，重开一下 App 再试"
+            return
+        }
+        PiPController.shared.onStateChange = { [weak self] active, err in
+            guard let self else { return }
+            self.pipActive = active
+            if let err {
+                self.status = "浮窗没起来：\(err)"
+            } else if active {
+                self.status = "浮窗已开 · 回 JJ象棋，用「最新截图」出招"
+            }
+        }
+        refreshPanel()
+        PiPController.shared.start(sourceView: anchor)
+        pipActive = true
+    }
+
+    /// 把当前结论推到浮窗
+    func refreshPanel() {
+        guard PiPController.shared.isActive else { return }
+        let hint: String = pipCells > 0 ? "浮窗挡住 \(pipCells) 格，往边上拖" : ""
+        PiPController.shared.update(
+            fen: panelFen(),
+            moveChinese: bestChinese,
+            fromSq: panelMap(fromSq),
+            toSq: panelMap(toSq),
+            scoreText: scoreText,
+            winrate: winratePct,
+            depth: depth,
+            sideText: redAtBottom ? "你执红" : "你执黑",
+            hint: hint
+        )
+    }
+
+    /// 你执黑时浮窗里的小棋盘也要转过来（自己的子在下），不然看着别扭
+    private func panelMap(_ sq: Int) -> Int {
+        guard sq >= 0, sq < 90, !redAtBottom else { return sq }
+        let r = sq / 9, c = sq % 9
+        return (9 - r) * 9 + (8 - c)
+    }
+
+    private func panelFen() -> String {
+        var rows: [String] = []
+        for r in 0..<10 {
+            var s = ""
+            var empty = 0
+            for c in 0..<9 {
+                let src = redAtBottom ? (r * 9 + c) : ((9 - r) * 9 + (8 - c))
+                if let ch = board[src] {
+                    if empty > 0 { s += String(empty); empty = 0 }
+                    s.append(ch)
+                } else {
+                    empty += 1
+                }
+            }
+            if empty > 0 { s += String(empty) }
+            rows.append(s)
+        }
+        return rows.joined(separator: "/")
     }
 
     /// ucci 串（如 b7c7）取第 idx 个格子（0=from,1=to）

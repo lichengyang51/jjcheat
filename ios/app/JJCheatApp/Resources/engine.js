@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T06:05:36.000Z
+ *  生成时间: 2026-10-30T06:27:25.997Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2180,7 +2180,7 @@ function buildDiskIntegral(pixels, w, h) {
  *
  * @returns {{x0,y0,x1,y1}|null}
  */
-function findPipRect(pixels, w, h) {
+function findPipRectBeige(pixels, w, h) {
   // 先按 16x16 分块统计「浮窗米黄」占比。
   // 直接用所有命中像素求外接矩形会被画面里零散的高光点撑满整屏（实测过），
   // 所以必须先分块、再挑最大的连通块。
@@ -2958,13 +2958,24 @@ class BoardRecognizer {
       out[sq] = this.sampleCell(pixels, w, h, pts[sq * 2], pts[sq * 2 + 1], radius, wantPatch, gain);
     }
     this.lastStats = { pts, cell, radius, gain };
-    // 顺便记下自己画中画的位置：既能用来跳过被遮挡的交叉点，
-    // 也能让 App 端提醒用户「浮窗挡住棋盘了，拖走」。
+    // 浮窗（画中画）会一起被截进截图里，盖住的那几格读出来一定是浮窗自己的画面，
+    // 所以整格作废（保留上一帧的值），而不是拿去识别。
     this.pipRect = findPipRect(pixels, w, h);
-    this.pipOverlap = !!(this.pipRect && this.pipRect.y1 >= pts[1] - cell * 0.6
-      && this.pipRect.y0 <= pts[9 * 9 * 2 + 1] + cell * 0.6
-      && this.pipRect.x1 >= pts[0] - cell * 0.6
-      && this.pipRect.x0 <= pts[8 * 2] + cell * 0.6);
+    this.occluded = new Uint8Array(90);
+    let occN = 0;
+    if (this.pipRect) {
+      const pr = this.pipRect;
+      const pad = cell * 0.5;
+      for (let sq = 0; sq < 90; sq++) {
+        const px = pts[sq * 2], py = pts[sq * 2 + 1];
+        if (px >= pr.x0 - pad && px <= pr.x1 + pad && py >= pr.y0 - pad && py <= pr.y1 + pad) {
+          this.occluded[sq] = 1;
+          occN++;
+        }
+      }
+    }
+    this.occludedCount = occN;
+    this.pipOverlap = occN > 0;
     if (wantPatch && this.templates && this.enableLowConfRefine) {
       this.refineLowConfidence(out, pixels, w, h, pts, cell, radius, gain);
     }
@@ -3637,6 +3648,58 @@ class BoardRecognizer {
     }
     return best ? { key: best.key, dist: bestD } : null;
   }
+}
+
+/**
+ * 找画中画浮窗：只认 App 自己画的那圈洋红边框
+ *
+ * 为什么不能用「猜颜色」：老版本按「米黄色块」判断浮窗位置，
+ * 可棋盘本身就是米黄的 —— 空格被当成浮窗、半盘被抹空，
+ * 还反复误报「浮窗挡棋盘」，盘面直接用不了（这段历史在雷达图里最长）。
+ *
+ * 现在 App 在浮窗内容外面画一圈 4px 洋红 (255,0,255)：
+ * 这种颜色在棋盘、棋子、JJ象棋界面上都不存在，认出来就是 100% 确定；
+ * 认不出来就返回 null，等于「没有浮窗」，绝不会误伤棋盘。
+ */
+function findPipRect(pixels, w, h) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1, n = 0;
+  for (let y = 0; y < h; y += 2) {
+    const base = y * w;
+    for (let x = 0; x < w; x += 2) {
+      const i = (base + x) * 4;
+      const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+      if (R > 175 && G < 105 && B > 175) {
+        n++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (n < 100) return null;
+  const rw = x1 - x0, rh = y1 - y0;
+  if (rw < 70 || rh < 40) return null;
+  if (rw > w * 0.9 && rh > h * 0.6) return null;
+
+  // 四条边都得有洋红，排除画面里零散的高光/贴图
+  const edgeCount = (ax, ay, bx, by) => {
+    let c = 0;
+    for (let t = 0; t <= 24; t++) {
+      const x = Math.round(ax + (bx - ax) * t / 24);
+      const y = Math.round(ay + (by - ay) * t / 24);
+      if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) continue;
+      const i = (y * w + x) * 4;
+      const R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+      if (R > 160 && G < 120 && B > 160) c++;
+    }
+    return c;
+  };
+  if (edgeCount(x0, y0, x1, y0) < 16) return null;
+  if (edgeCount(x0, y1, x1, y1) < 16) return null;
+  if (edgeCount(x0, y0, x0, y1) < 12) return null;
+  if (edgeCount(x1, y0, x1, y1) < 12) return null;
+  return { x0: x0, y0: y0, x1: x1, y1: y1 };
 }
 
 module.exports = {
@@ -4408,6 +4471,19 @@ var JJEngine = {
     var mergedCodes = new Array(90);
     var lowConfCount = 0;
     for (var sm = 0; sm < 90; sm++) {
+      // ★ 被浮窗盖住的格子：整格作废，保留上一帧的值
+      //
+      //   浮窗会一起被截进截图里，那几格采到的其实是浮窗画面（我们自己的小棋盘），
+      //   拿去识别就会凭空多出棋子、还把网格拉偏 —— 历史上这就是「浮窗挡棋盘」翻车的根源。
+      //   现在浮窗自带一圈洋红边框（App 端画的），引擎按边框精确算出盖住了哪几格，
+      //   这几格保留上一帧的值；没有上一帧就留空（宁可少一个子，也不要凭空多一个）。
+      if (session.recognizer && session.recognizer.occluded && session.recognizer.occluded[sm]) {
+        mergedCodes[sm] = (prevCodes && prevCodes[sm] !== undefined && prevCodes[sm] !== null)
+          ? prevCodes[sm] : 0;
+        session.lowStreak = session.lowStreak || new Array(90).fill(0);
+        session.lowStreak[sm] = 0;
+        continue;
+      }
       var raw = cls.codes ? cls.codes[sm] : 0;
       var conf = cls.conf ? (cls.conf[sm] || 0) : 1;
       var st = stats[sm];
@@ -4527,10 +4603,10 @@ var JJEngine = {
       bottomRed: bottomRed,
       bottomBlack: bottomBlack,
       stable: isStable ? 1 : 0,
-      // 遮挡提示已删除：真机抓屏下「暖色无墨」这个判据连空棋盘格都会命中，
-      // 会导致半盘被抹空 + 假报「挡住」。恒为 0，App 不再显示该提示。
-      pipOverlap: 0,
-      hiddenCells: 0
+      // 浮窗盖住了几格（浮窗自带洋红边框，引擎按边框算出来的，不是猜颜色）
+      pipOverlap: (session.recognizer && session.recognizer.occludedCount) || 0,
+      pipRect: (session.recognizer && session.recognizer.pipRect) || null,
+      hiddenCells: (session.recognizer && session.recognizer.occludedCount) || 0
     };
 
     // ★ 主路径：直接把识别出的兵种组回 FEN

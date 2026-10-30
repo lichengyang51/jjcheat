@@ -58,6 +58,17 @@ struct ContentView: View {
                         .foregroundColor(.black.opacity(0.8))
                         .lineLimit(2)
                     Spacer(minLength: 0)
+                    // 浮窗（画中画）：开起来以后切到 JJ象棋，一边看棋一边看着法
+                    Button {
+                        model.toggleFloatingPanel()
+                    } label: {
+                        Text(model.pipActive ? "关浮窗" : "开浮窗")
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(model.pipActive ? Color.purple.opacity(0.9) : Color.gray.opacity(0.75))
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                    }
                     // 一键吃最新截图：截图 → 打开 App → 点这一下，两秒出着法。
                     // 不用再走「选图 → 相册 → 找到那张 → 选」这条四步路。
                     Button {
@@ -95,6 +106,7 @@ struct ContentView: View {
                 Spacer(minLength: 0)
             }
             .background(Color(red: 0.97, green: 0.96, blue: 0.93))
+            .background(PipAnchor { v in model.setPipAnchor(v) })
             .disabled(model.showMenu)
 
             if model.showMenu {
@@ -404,6 +416,7 @@ struct ContentView: View {
                     menuItem("编辑局面") { model.editMode.toggle() }
                     menuItem("拍照识别局面") { model.showCamera = true }
                     menuItem("识别最新一张截图") { model.analyzeLatestScreenshot() }
+                    menuItem(model.pipActive ? "关闭浮窗（画中画）" : "开启浮窗（画中画）") { model.toggleFloatingPanel() }
                     menuItem("复制局面") { _ = model.copyFen() }
                     menuItem("粘贴局面") { model.pasteFen() }
                     menuItem("重新开始") { model.restart() }
@@ -507,4 +520,19 @@ struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
     }
+}
+
+/// 拿一个真实的 UIView 给画中画当锚点（PiP 需要一个 on-screen 的 sourceView）
+struct PipAnchor: UIViewRepresentable {
+    let onView: (UIView) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.backgroundColor = .clear
+        v.isUserInteractionEnabled = false
+        DispatchQueue.main.async { onView(v) }
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }

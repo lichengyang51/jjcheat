@@ -46,6 +46,9 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         ITSAppUsesNonExemptEncryption: false
+        # 画中画浮窗要在切到别的 App 之后继续活着，必须有这个后台模式
+        UIBackgroundModes:
+          - audio
         NSCameraUsageDescription: 拍棋盘照片，用来识别当前局面并给出着法。照片只在本机处理，不会上传。
         NSPhotoLibraryUsageDescription: 选择棋盘照片或读取刚截的截图，用来识别当前局面并给出着法。照片只在本机处理，不会上传。
     settings:
