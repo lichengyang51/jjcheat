@@ -230,94 +230,95 @@ final class FloatingPanelView: UIView {
     // MARK: - 右边四行文字（深度 / 用时 / 分数 / 候选着法）
 
     private func drawInfo(in r: CGRect) {
-        let padX = r.width * 0.045
+        let padX = r.width * 0.05
         let availW = r.width - padX * 2
         let slate = UIColor(red: 0.24, green: 0.31, blue: 0.42, alpha: 1)
         let blue = UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1)
-        var y = r.minY + r.height * 0.04
+        var y = r.minY + r.height * 0.05
 
-        func draw(_ text: String, size: CGFloat, color: UIColor) {
+        /// 画一行：先按可用宽度缩字号，缩到下限还不够就按字符折行。
+        /// 以前的写法只在「拼下一段」时判宽，单独一段超长就直接画出去 ——
+        /// 用户截图里「炮八平五 兵一进一」冲出悬浮窗就是这么来的。
+        func drawFitted(_ text: String, size: CGFloat, color: UIColor, weight: UIFont.Weight = .regular) {
             var fs = size
-            var attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: fs, weight: .regular),
-                .foregroundColor: color
-            ]
-            let s = text as NSString
-            var sz = s.size(withAttributes: attrs)
-            while sz.width > availW && fs > 6 {
-                fs -= 0.5
-                attrs[.font] = UIFont.systemFont(ofSize: fs, weight: .regular)
-                sz = s.size(withAttributes: attrs)
+            func attrs(_ s: CGFloat) -> [NSAttributedString.Key: Any] {
+                [.font: UIFont.systemFont(ofSize: s, weight: weight), .foregroundColor: color]
             }
-            s.draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs)
-            y += sz.height + r.height * 0.015
+            var w = (text as NSString).size(withAttributes: attrs(fs)).width
+            while w > availW && fs > 7 {
+                fs -= 0.5
+                w = (text as NSString).size(withAttributes: attrs(fs)).width
+            }
+            if w <= availW {
+                let sz = (text as NSString).size(withAttributes: attrs(fs))
+                if y + sz.height > r.maxY { return }
+                (text as NSString).draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs(fs))
+                y += sz.height + r.height * 0.012
+                return
+            }
+            // 缩到下限还放不下：按字符切
+            var line = ""
+            for ch in text {
+                let candidate = line + String(ch)
+                let cw = (candidate as NSString).size(withAttributes: attrs(fs)).width
+                if cw > availW && !line.isEmpty {
+                    let sz = (line as NSString).size(withAttributes: attrs(fs))
+                    if y + sz.height > r.maxY { return }
+                    (line as NSString).draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs(fs))
+                    y += sz.height + r.height * 0.012
+                    line = String(ch)
+                } else {
+                    line = candidate
+                }
+            }
+            if !line.isEmpty {
+                let sz = (line as NSString).size(withAttributes: attrs(fs))
+                if y + sz.height > r.maxY { return }
+                (line as NSString).draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs(fs))
+                y += sz.height + r.height * 0.012
+            }
         }
 
         let h = r.height
-        draw("深度: \(depth)", size: h * 0.155, color: slate)
-        draw(String(format: "%.1f秒", secs), size: h * 0.155, color: slate)
-        draw("分数: \(score)", size: h * 0.175, color: blue)
-
-        // 候选着法：一行放不下就折行（绝不截断）
-        let moveSize = h * 0.175
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: moveSize, weight: .regular),
-            .foregroundColor: slate
-        ]
-        var line = ""
-        var lines: [String] = []
-        for m in moves {
-            let candidate = line.isEmpty ? m : line + "  " + m
-            let w = (candidate as NSString).size(withAttributes: attrs).width
-            if w > availW && !line.isEmpty {
-                lines.append(line)
-                line = m
-            } else {
-                line = candidate
-            }
-        }
-        if !line.isEmpty { lines.append(line) }
-        for ln in lines {
-            let lh = (ln as NSString).size(withAttributes: attrs).height
-            if y + lh > r.maxY - 2 { break }
-            (ln as NSString).draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs)
-            y += lh + r.height * 0.015
-        }
+        drawFitted("深度: \(depth)", size: h * 0.125, color: slate)
+        drawFitted(String(format: "%.1f秒", secs), size: h * 0.125, color: slate)
+        drawFitted("分数: \(score)", size: h * 0.140, color: blue)
+        // 候选着法：每个着法单独一段，超宽自动折
+        drawFitted(moves.joined(separator: "  "), size: h * 0.130, color: slate)
     }
 
     // MARK: - 等待/提示状态
 
     private func drawWaiting(in r: CGRect) {
-        let padX = r.width * 0.045
+        let padX = r.width * 0.05
         let availW = r.width - padX * 2
-        var y = r.minY + r.height * 0.05
+        var y = r.minY + r.height * 0.06
 
         func line(_ text: String, size: CGFloat, color: UIColor) {
             var fs = size
-            var attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: fs, weight: .regular),
-                .foregroundColor: color
-            ]
-            let s = text as NSString
-            var sz = s.size(withAttributes: attrs)
-            while sz.width > availW && fs > 6 {
-                fs -= 0.5
-                attrs[.font] = UIFont.systemFont(ofSize: fs, weight: .regular)
-                sz = s.size(withAttributes: attrs)
+            func attrs(_ s: CGFloat) -> [NSAttributedString.Key: Any] {
+                [.font: UIFont.systemFont(ofSize: s, weight: .regular), .foregroundColor: color]
             }
-            s.draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs)
+            var w = (text as NSString).size(withAttributes: attrs(fs)).width
+            while w > availW && fs > 7 {
+                fs -= 0.5
+                w = (text as NSString).size(withAttributes: attrs(fs)).width
+            }
+            let sz = (text as NSString).size(withAttributes: attrs(fs))
+            guard y + sz.height <= r.maxY else { return }
+            (text as NSString).draw(at: CGPoint(x: r.minX + padX, y: y), withAttributes: attrs(fs))
             y += sz.height + r.height * 0.02
         }
 
         let h = r.height
         guard h > 90 else {
-            line(busyText, size: h * 0.20, color: UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1))
+            line(busyText, size: h * 0.18, color: UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1))
             return
         }
-        line("单击可以隐藏关闭按钮", size: h * 0.085, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
-        line("双指按住操作可以缩放悬浮窗", size: h * 0.085, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
-        y += h * 0.06
-        line(busyText, size: h * 0.155, color: UIColor(red: 0.18, green: 0.30, blue: 0.48, alpha: 1))
-        line(warnText, size: h * 0.10, color: UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1))
+        line("单击可以隐藏关闭按钮", size: h * 0.075, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
+        line("双指按住操作可以缩放悬浮窗", size: h * 0.075, color: UIColor(red: 0.49, green: 0.53, blue: 0.60, alpha: 1))
+        y += h * 0.04
+        line(busyText, size: h * 0.125, color: UIColor(red: 0.18, green: 0.30, blue: 0.48, alpha: 1))
+        line(warnText, size: h * 0.085, color: UIColor(red: 0.16, green: 0.42, blue: 0.90, alpha: 1))
     }
 }

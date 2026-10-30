@@ -264,7 +264,9 @@ final class AppModel: ObservableObject {
     func compute(limitSeconds: Double? = nil) {
         guard !thinking else { return }
         thinking = true
-        rows = []
+        // 实时模式下不要清空候选：「清空 → 重搜 0.8 秒 → 再填回」这段时间里
+        // 浮窗会先跳成「正在识别」再变回着法，看着就是一秒三跳。
+        if limitSeconds == nil { rows = [] }
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
         let budget = limitSeconds ?? thinkSeconds
         let ms = Int(max(0.4, budget) * 1000)
@@ -323,6 +325,8 @@ final class AppModel: ObservableObject {
     // MARK: - 画中画浮窗（鹏飞式小窗）
 
     private var lastLiveAnalyze = Date.distantPast
+    /// 浮窗上一次显示过的候选着法（实时模式下用来防止来回跳）
+    private var lastPanelMoves: [String] = []
     private var pipAnchor: UIView?
 
     func setPipAnchor(_ v: UIView) { pipAnchor = v }
@@ -448,6 +452,8 @@ final class AppModel: ObservableObject {
         let hint: String = pipCells > 0 ? "浮窗挡住 \(pipCells) 格，往边上拖" : ""
         var mv = rows.prefix(3).map { $0.chinese }.filter { !$0.isEmpty }
         if mv.isEmpty && !bestChinese.isEmpty { mv = [bestChinese] }
+        if mv.isEmpty { mv = lastPanelMoves }
+        if !mv.isEmpty { lastPanelMoves = mv }
         if mv.isEmpty {
             PiPController.shared.waiting(liveActive ? "正在识别" : "等一张截图")
             return
