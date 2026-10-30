@@ -14,7 +14,7 @@
 //
 //  · 左边约 1/3：木纹小棋盘，红子红盘、黑子黑盘、字是白的，蓝色箭头指着刚给的着法
 //  · 右边约 2/3：浅蓝白底，四行左对齐文字（深度 / 用时 / 分数 / 候选着法）
-//  · 左下角一个「菜单」小戳（鹏飞也有）；左上角的叉、右上角的图标是系统画中画自带的
+//  · 左上角的叉、右上角的图标是系统画中画自带的
 //  · 还没识别出局面时显示鹏飞那四行提示：单击隐藏关闭按钮 / 双指缩放 / 正在识别 / 注意不要遮挡
 //
 //  ★ 外面那圈洋红边框别动 ★
@@ -127,22 +127,6 @@ final class FloatingPanelView: UIView {
         } else {
             drawInfo(in: textRect)
         }
-
-        // 左下角「菜单」小戳
-        let menuW = boardW * 0.34, menuH = inner.height * 0.15
-        let menuRect = CGRect(x: inner.minX + boardW * 0.03,
-                              y: inner.maxY - menuH - inner.height * 0.03,
-                              width: menuW, height: menuH)
-        UIColor(red: 0.60, green: 0.60, blue: 0.62, alpha: 0.88).setFill()
-        UIBezierPath(roundedRect: menuRect, cornerRadius: menuH * 0.24).fill()
-        let menuAttrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: menuH * 0.60, weight: .medium),
-            .foregroundColor: UIColor.white
-        ]
-        let ms = "菜单" as NSString
-        let msz = ms.size(withAttributes: menuAttrs)
-        ms.draw(at: CGPoint(x: menuRect.midX - msz.width / 2, y: menuRect.midY - msz.height / 2),
-                withAttributes: menuAttrs)
     }
 
     // MARK: - 小棋盘
