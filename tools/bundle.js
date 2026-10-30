@@ -836,7 +836,9 @@ var JJEngine = {
       // 局面更新限流：最多每 700ms 换一次。
       // 识别偶尔抖动时，靠这道闸门挡住「一秒内连换五个着法」的情况。
       var nowMs = Date.now();
-      var canUpdate = (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
+      // 实时模式（录屏浮窗）不限流：棋盘一变就要立刻反映出来。
+      // 照片模式保留 700ms 限流，防止识别抖动时界面乱换。
+      var canUpdate = liveMode || (!session.lastFenUpdateTime) || (nowMs - session.lastFenUpdateTime > 700);
 
       session.lastRawFen = rawFen;
 

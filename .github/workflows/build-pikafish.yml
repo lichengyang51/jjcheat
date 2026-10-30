@@ -1,0 +1,57 @@
+name: build-pikafish
+
+# 只负责把皮卡鱼编译成 iOS arm64 静态库，出包那套流程完全不受影响。
+# 编译成功 → 上传 libpikafish.a；失败 → 只在这里红，App 照旧能出包。
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-pikafish.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: 选 Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16'
+
+      - name: 克隆皮卡鱼 + 下网络文件
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git pf
+          cd pf
+          echo "--- 目录 ---"
+          ls
+          echo "--- scripts ---"
+          ls scripts || true
+          echo "--- 下载网络文件 ---"
+          cd src
+          sh ../scripts/net.sh || true
+          ls -la *.nnue 2>/dev/null || echo "源码目录没有 nnue"
+
+      - name: 试编译（先把报错打出来）
+        run: |
+          set -x
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          cd pf/src
+          CXX="clang++ -arch arm64 -isysroot $SDK -mios-version-min=16.0 -std=c++17 -O2 -fPIC -DNDEBUG"
+          mkdir -p obj_ios
+          ok=0; fail=0
+          for f in *.cpp nnue/*.cpp; do
+            o="obj_ios/$(echo $f | tr '/' '_' | sed 's/\.cpp$/.o/')"
+            if $CXX -I. -c "$f" -o "$o"; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAILED: $f"; fi
+          done
+          echo "编译成功 $ok 个，失败 $fail 个"
+          xcrun libtool -static -o libpikafish.a obj_ios/*.o 2>&1 | tail -3 || true
+          ls -la libpikafish.a 2>/dev/null || echo "静态库没生成"
+
+      - name: 上传（哪怕只有部分成功）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pikafish-lib
+          path: pf/src/libpikafish.a
+          if-no-files-found: warn

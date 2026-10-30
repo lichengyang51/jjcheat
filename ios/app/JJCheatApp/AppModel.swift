@@ -465,9 +465,14 @@ final class AppModel: ObservableObject {
         }
         if !engineFen.isEmpty { applyCloudBook(engineFen) }
 
-        // 没有库着：局面变了立刻算一次；否则每 1.8 秒加深一次
+        // 没有库着：
+        //   局面刚变 → 先用 0.45 秒快出一手（让对方一落子就看见答案）
+        //   之后每 1.4 秒再加深一次（有置换表，加深很快，着法有滞回不会跳）
         let now = Date()
-        if changed || now.timeIntervalSince(lastLiveAnalyze) > 1.8 {
+        if changed {
+            lastLiveAnalyze = now
+            compute(limitSeconds: 0.45)
+        } else if now.timeIntervalSince(lastLiveAnalyze) > 1.4 {
             lastLiveAnalyze = now
             compute(limitSeconds: 1.6)
         }

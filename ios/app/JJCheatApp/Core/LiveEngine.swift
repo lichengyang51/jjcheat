@@ -53,7 +53,8 @@ final class LiveEngine {
         let n = framesSeen
         DispatchQueue.main.async { [weak self] in self?.onTick?(n) }
         let now = Date()
-        if now.timeIntervalSince(lastAt) < 0.20 { return }
+        // 120ms 一帧：识别一帧约 60~90ms，留点余量，落子后半秒内就能反映到浮窗
+        if now.timeIntervalSince(lastAt) < 0.12 { return }
         if inFlight { return }
         lastAt = now
         inFlight = true
