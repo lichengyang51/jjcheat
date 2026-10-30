@@ -17,6 +17,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 给 FEN（含走子方）算出 UCCI 着法，如 "h2e2"；失败返回 nil
 + (nullable NSString *)bestMove:(NSString *)fen movetimeMs:(int)ms;
 
+/// 开局库 BOOK.DAT 在不在（在 .app 根目录）
++ (BOOL)bookAvailable;
+
+/// 开局库累计命中次数
++ (NSInteger)bookHits;
+
 /// 上一手是不是开局库给的（BOOK.DAT）
 + (BOOL)lastWasBook;
 

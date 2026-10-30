@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
     @Published var pipActive = false
     /// 这一手是不是来自开局库（浮窗要显示「库: X」，跟鹏飞一样）
     @Published var isBookMove = false
+    /// 开局库 BOOK.DAT 是否在包里
+    @Published var bookAvailable = false
+    /// 开局库命中次数（显示在「开局库」标签页）
+    @Published var bookHits: Int = 0
     /// 象眼引擎能不能用
     @Published var hasEngine = false
     /// 引擎状态文字（显示在抽屉里，方便定位为什么不工作）
@@ -107,6 +111,7 @@ final class AppModel: ObservableObject {
 
     func bootstrap() {
         probeEngines()   // 启动就探一次，抽屉里直接能看到引擎状态
+        bookAvailable = EleeyeBridge.bookAvailable()
         guard !started else { return }
         started = true
         _ = JJEngine.shared
@@ -300,6 +305,8 @@ final class AppModel: ObservableObject {
                 self.engineUsed = "象眼"
                 // 开局库命中：象眼直接从 BOOK.DAT 给着法（depth 0，没有 info time）
                 let fromBook = EleeyeBridge.lastWasBook()
+                self.bookAvailable = EleeyeBridge.bookAvailable()
+                self.bookHits = Int(EleeyeBridge.bookHits())
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: eeMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {

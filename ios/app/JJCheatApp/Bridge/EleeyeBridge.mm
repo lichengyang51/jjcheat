@@ -13,6 +13,7 @@ int  ee_bestmove_ex(const char *fen, int movetimeMs, char *out, int outLen, int 
 }
 
 static BOOL g_wasBook = NO;
+static NSInteger g_bookHits = 0;
 
 static std::mutex g_mtx;
 static NSString *g_err = @"未尝试";
@@ -59,11 +60,21 @@ static BOOL g_ok = NO;
         rc = ee_bestmove_ex(fen.UTF8String, ms, buf, sizeof(buf), &isBook);
     }
     g_wasBook = (isBook != 0);
+    if (g_wasBook) g_bookHits++;
     if (rc != 0 || buf[0] == 0) {
         g_err = [NSString stringWithFormat:@"象眼算失败 rc=%d", rc];
         return nil;
     }
     return [NSString stringWithUTF8String:buf];
+}
+
++ (BOOL)bookAvailable {
+    // 工作目录已经在 .app（constructor(101) 切的），相对路径就能查
+    return [[NSFileManager defaultManager] fileExistsAtPath:@"BOOK.DAT"];
+}
+
++ (NSInteger)bookHits {
+    return g_bookHits;
 }
 
 + (BOOL)lastWasBook {

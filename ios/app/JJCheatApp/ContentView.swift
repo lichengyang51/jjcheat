@@ -368,11 +368,26 @@ struct ContentView: View {
                             }
                         }
                     } else if model.tabIndex == 1 {
-                        Text("开局库：本机未装开局库，用引擎直接算")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                            .padding(12)
-                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(model.bookAvailable ? Color.green : Color.orange)
+                                    .frame(width: 7, height: 7)
+                                Text(model.bookAvailable ? "本机开局库已装入（BOOK.DAT）" : "本机没有开局库文件")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            Text("开局库命中 \(model.bookHits) 次 · 命中时浮窗显示「库: 着法」")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Text("顺序：云库 chessdb.cn → 本机开局库 → 象眼引擎 → 本机 JS")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Text("本手来源：" + (model.isBookMove ? "开局库（库着）" : (model.hasEngine ? "象眼引擎计算" : "本机 JS 引擎计算")))
+                                .font(.system(size: 11))
+                                .foregroundColor(model.isBookMove ? .blue : .secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("局时 \(String(format: "%.1f", model.thinkSeconds)) 秒/步")
                             Slider(value: $model.thinkSeconds, in: 0.5...15, step: 0.5)

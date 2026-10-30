@@ -27,7 +27,8 @@ int main(int argc, char **argv) {
     Search.bBatch = true;      // 不读 stdin，只按计时停
     Search.bDebug = false;
     Search.bUseHash = true;
-    Search.bUseBook = false;
+    Search.bUseBook = true;
+    strcpy(Search.szBookFile, "../BOOK/BOOK.DAT");
     Search.bNullMove = true;
     Search.bKnowledge = true;
     Search.bIdle = false;
@@ -94,6 +95,7 @@ int main(int argc, char **argv) {
     size_t p = pos + 8;
     while (p < text.size() && text[p] == ' ') p++;
     if (p + 4 > text.size()) { printf("[结果] bestmove 后面不够 4 字节\n"); return 3; }
-    printf("[结果] 着法 = %.4s\n", text.c_str() + p);
+    printf("[结果] 着法 = %.4s", text.c_str() + p);
+    printf("[结果] 是否库着 = %d", (int) (text.find("info time") == std::string::npos));
     return 0;
 }
