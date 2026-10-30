@@ -71,13 +71,13 @@ targets:
         # 象眼（ElephantEye）源码在 CI 里 clone 到 ios/native/eleeye，
         # 头文件路径给 app 用（ee_bridge.cpp 要 include 它的头）。
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/native/eleeye"
-          - "$(SRCROOT)/native/eleeye/eleeye"
-          - "$(SRCROOT)/native/eleeye/base"
+          - "$(SRCROOT)/../native/eleeye"
+          - "$(SRCROOT)/../native/eleeye/eleeye"
+          - "$(SRCROOT)/../native/eleeye/base"
         # 象眼静态库：编不出来时 CI 会放空库，保证链接不失败
         OTHER_LDFLAGS:
           - "-force_load"
-          - "$(SRCROOT)/native/eleeye/eleeye/libeleeye.a"
+          - "$(SRCROOT)/../native/eleeye/eleeye/libeleeye.a"
         CLANG_CXX_LANGUAGE_STANDARD: "c++17"
         CLANG_CXX_LIBRARY: "libc++"
         GCC_PREPROCESSOR_DEFINITIONS:

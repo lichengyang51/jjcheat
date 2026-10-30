@@ -30,6 +30,9 @@
 
 #if EE_OK
 
+// eleeye.cpp 里定义的常量（那个文件自带 main()，我们不编它），这里补一份
+static const int INTERRUPT_COUNT = 4096;
+
 extern "C" {
 
 void ee_init(void) {

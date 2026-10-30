@@ -93,8 +93,14 @@ jobs:
           if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
                -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c ../../ee_bridge.cpp -o obj/ee_bridge.o; then ok=$((ok+1)); else echo "FAILED ee_bridge"; fi
           echo "象眼编译成功 $ok 个"
-          xcrun libtool -static -o libeleeye.a obj/*.o || true
-          ls -la libeleeye.a || echo "没生成静态库"
+          if [ -f obj/ee_bridge.o ]; then
+            xcrun libtool -static -o libeleeye.a obj/*.o || true
+            ls -la libeleeye.a
+          else
+            echo "ee_bridge.o 没编出来，这次不出静态库，交给下一步放空库"
+            rm -f libeleeye.a
+          fi
+          nm -gU libeleeye.a 2>/dev/null | grep -E 'ee_bestmove|_ee_' | head -5 || true
 
       - name: 象眼没编成时放个空库
         run: |
