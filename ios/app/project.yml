@@ -19,6 +19,7 @@ schemes:
     build:
       targets:
         JJCheatApp: all
+        JJCheatBroadcast: all
     run:
       config: Debug
     archive:
@@ -36,6 +37,7 @@ targets:
           - "Resources/**"
       - path: JJCheatApp/Resources
         buildPhase: resources
+      - path: Shared
     info:
       path: JJCheatApp/Info.plist
       properties:
@@ -55,4 +57,31 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"
+    dependencies:
+      - target: JJCheatBroadcast
+        embed: true
+
+  JJCheatBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: JJCheatBroadcast
+        excludes:
+          - "Info.plist"
+          - "*.entitlements"
+      - path: Shared
+    info:
+      path: JJCheatBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: 象棋强软 录屏
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: SampleHandler
+          RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fujiang.jjcheat.broadcast
         TARGETED_DEVICE_FAMILY: "1"

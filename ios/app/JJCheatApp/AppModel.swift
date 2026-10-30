@@ -77,6 +77,10 @@ final class AppModel: ObservableObject {
     @Published var pipActive = false
     /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
     @Published var pipCells: Int = 0
+    /// 实时模式（录屏 + 浮窗）是否开着
+    @Published var liveActive = false
+    /// 实时模式的帧率/耗时（显示用）
+    @Published var liveInfo: String = ""
     /// 编辑模式：打开后点棋盘才会改子，平时点棋盘不动
 
 
@@ -316,6 +320,68 @@ final class AppModel: ObservableObject {
     private var pipAnchor: UIView?
 
     func setPipAnchor(_ v: UIView) { pipAnchor = v }
+
+    /// 「连接悬浮窗」：鹏飞那一套的三步合成一个按钮
+    ///
+    ///   ① 开浮窗（画中画）—— 浮在 JJ象棋 上面，可以拖动、可以缩放
+    ///   ② 起帧服务器（127.0.0.1:9527）—— 等录屏扩展把画面送进来
+    ///   ③ 弹系统录屏面板 —— 你点「开始直播/录屏」，浮窗里的棋盘就开始跟着棋局走
+    func connectFloating() {
+        if liveActive {
+            stopFloating()
+            return
+        }
+        LiveEngine.shared.onResult = { [weak self] res in self?.applyLive(res) }
+        LiveEngine.shared.onStats = { [weak self] seen, ms, size in
+            guard let self else { return }
+            self.liveInfo = "\(seen) 帧 · \(ms)ms · \(Int(size.width))×\(Int(size.height))"
+        }
+        LiveEngine.shared.start()
+        liveActive = true
+        AudioKeepAlive.shared.start()
+        if !PiPController.shared.isActive { toggleFloatingPanel() }
+        BroadcastPickerHolder.shared.trigger()
+        status = "浮窗已开 · 在系统面板里点「开始直播」，浮窗会跟着棋局实时更新"
+    }
+
+    func stopFloating() {
+        LiveEngine.shared.stop()
+        liveActive = false
+        liveInfo = ""
+        AudioKeepAlive.shared.stop()
+        PiPController.shared.stop()
+        pipActive = false
+        status = "浮窗已关"
+    }
+
+    /// 实时帧的识别结果直接推到界面和浮窗
+    private func applyLive(_ res: [String: Any]) {
+        let engineFen = (res["engineFen"] as? String) ?? ""
+        let rawFen = (res["fen"] as? String) ?? ""
+        guard !engineFen.isEmpty || !rawFen.isEmpty else { return }
+        if !engineFen.isEmpty {
+            setBoardFromFen(engineFen)
+        }
+        redAtBottom = ((res["mySide"] as? String) ?? "red") == "red"
+        pipCells = JJEngine.int(res, "pipOverlap", 0)
+
+        let move = JJEngine.str(res, "suggestChinese", "")
+        if !move.isEmpty { bestChinese = move }
+        fromSq = JJEngine.int(res, "from", -1)
+        toSq = JJEngine.int(res, "to", -1)
+        let sc = JJEngine.int(res, "score", 0)
+        if sc > 29000 {
+            scoreText = "绝杀(我方赢)"
+        } else if sc < -29000 {
+            scoreText = "被绝杀(我方被将死)"
+        } else {
+            scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
+        }
+        winratePct = JJEngine.double(res, "winrate", 50)
+        depth = JJEngine.int(res, "depth", 0)
+        status = "实时 · \(liveInfo) · \(redAtBottom ? "你执红" : "你执黑")"
+        refreshPanel()
+    }
 
     /// 开/关浮窗
     func toggleFloatingPanel() {

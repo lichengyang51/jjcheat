@@ -58,14 +58,14 @@ struct ContentView: View {
                         .foregroundColor(.black.opacity(0.8))
                         .lineLimit(2)
                     Spacer(minLength: 0)
-                    // 浮窗（画中画）：开起来以后切到 JJ象棋，一边看棋一边看着法
+                    // 连接悬浮窗：开浮窗 + 起帧服务 + 弹系统录屏面板（鹏飞那套三步）
                     Button {
-                        model.toggleFloatingPanel()
+                        model.connectFloating()
                     } label: {
-                        Text(model.pipActive ? "关浮窗" : "开浮窗")
+                        Text(model.liveActive ? "断开浮窗" : "连接悬浮窗")
                             .font(.system(size: 11, weight: .semibold))
                             .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(model.pipActive ? Color.purple.opacity(0.9) : Color.gray.opacity(0.75))
+                            .background(model.liveActive ? Color.purple.opacity(0.92) : Color.blue.opacity(0.85))
                             .foregroundColor(.white)
                             .cornerRadius(6)
                     }
@@ -107,6 +107,7 @@ struct ContentView: View {
             }
             .background(Color(red: 0.97, green: 0.96, blue: 0.93))
             .background(PipAnchor { v in model.setPipAnchor(v) })
+            .background(BroadcastPickerAnchor().frame(width: 1, height: 1).opacity(0.01))
             .disabled(model.showMenu)
 
             if model.showMenu {
@@ -416,7 +417,8 @@ struct ContentView: View {
                     menuItem("编辑局面") { model.editMode.toggle() }
                     menuItem("拍照识别局面") { model.showCamera = true }
                     menuItem("识别最新一张截图") { model.analyzeLatestScreenshot() }
-                    menuItem(model.pipActive ? "关闭浮窗（画中画）" : "开启浮窗（画中画）") { model.toggleFloatingPanel() }
+                    menuItem(model.liveActive ? "断开浮窗（停止实时）" : "连接悬浮窗（录屏实时）") { model.connectFloating() }
+                    menuItem(model.pipActive ? "只关浮窗" : "只开浮窗（不录屏）") { model.toggleFloatingPanel() }
                     menuItem("复制局面") { _ = model.copyFen() }
                     menuItem("粘贴局面") { model.pasteFen() }
                     menuItem("重新开始") { model.restart() }
