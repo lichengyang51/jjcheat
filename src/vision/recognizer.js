@@ -975,6 +975,17 @@ class BoardRecognizer {
     // 默认关闭 —— 实测在 0.34 半径下它反而把本来认对的红子改成错的
     // （u_dots 从 0 错变成 2 错），逐格置信度 + 保留上一稳定值那套已经够用。
     this.enableLowConfRefine = !!cfg.enableLowConfRefine;
+    // 兵种打分方式：'dot'（归一化点积）或 'mass'（点积 + 笔画总量惩罚）
+    //
+    // 实测（630 格，含两张困难残局）：
+    //   dot         错 5
+    //   mass:0.35   错 4
+    //   mass:0.70   错 2   ← 采用
+    // 原因：点积对「这个字到底有几笔」不敏感，笔画被采样丢一半时
+    // 反而跟笔画最少的那个字最像（馬→卒、俥→仕、象→卒）。
+    // 乘上一个「样本墨迹量 vs 模板墨迹量」的折扣，复杂度也成了判据。
+    this.scoreMode = cfg.scoreMode || 'mass';
+    this.massK = (typeof cfg.massK === 'number') ? cfg.massK : 0.70;
 
     // 径向权重：中心权重高、边缘权重低。
     // 空格的 patch 边缘是棋盘网格线（深色直线），棋子的边缘是圆形描边，
@@ -1089,64 +1100,86 @@ class BoardRecognizer {
       const span = radius * 2;
       const stepPx = span / PW;
       const halfP = (PW - 1) / 2;
+      // ★ 亚像素四点平均（盒式滤波）
+      //
+      // 为什么必须这么做：patch 只有 24x24，而采样窗常常 50 像素以上 ——
+      // 也就是说一个 patch 像素要代表 2 像素以上的源区域。原来的写法是
+      // 「点采样」，细笔画（俥/傌/馬/象 的横竖撇）会随相位被稀疏采到、甚至整段漏掉。
+      // 漏掉之后这个字看上去就像「笔画更少的那个字」，实测失败签名非常一致：
+      //   俥→仕、傌→仕、象→卒、馬→卒（复杂字全被读成最简单的字）
+      // 而且同一张图缩放到 700 和 589 会给出不同结果 —— 本质就是相位不同。
+      // 现在每个 patch 像素在自身footprint 内取 4 个亚像素点、按多数表决，
+      // 笔画不再随相位丢失，不同分辨率之间也一致。
+      const subOff = stepPx * 0.25;
       for (let py = 0; py < PW; py++) {
         for (let px = 0; px < PW; px++) {
-          const sx = Math.round(cx - radius + (px + 0.5) * stepPx);
-          const sy = Math.round(cy - radius + (py + 0.5) * stepPx);
-          if (sx < 1 || sy < 1 || sx >= w - 1 || sy >= h - 1) continue;
-          const i = (sy * w + sx) * 4;
-          var R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
-          if (g !== 1) {
-            R = R * g > 255 ? 255 : (R * g) | 0;
-            G = G * g > 255 ? 255 : (G * g) | 0;
-            B = B * g > 255 ? 255 : (B * g) | 0;
-          }
-
-          const idx = py * PW + px;
+          const bx = cx - radius + (px + 0.5) * stepPx;
+          const by = cy - radius + (py + 0.5) * stepPx;
           const du = (px - halfP) / halfP, dv = (py - halfP) / halfP;
           const rr = Math.sqrt(du * du + dv * dv);
-          if (isPureGreen(R, G, B)) { skipped++; continue; }
-          // 白色高亮圈：既不是墨也不是暖色，直接跳过，
-          // 否则它会把整格的 ink/warm 拉成 0。
-          if (R > 200 && G > 200 && B > 200) { skipped++; continue; }
-          // 外圈的「红色高亮圈」：亮红、绿通道很低，和棋子盘面/红字都不同。
-          // 圈落在 rr≈0.8~0.95，只在这一圈里判，不影响中心字形。
-          if (rr > 0.66 && R > 150 && G < 125 && (R - G) > 60) { continue; }
+          const inCore = (py >= 6 && py <= 17 && px >= 6 && px <= 17);
+          let okN = 0, wN = 0, rN = 0, iN = 0, riN = 0, diN = 0;
+          let lSum = 0, redN = 0, darkN = 0, brightN = 0, warmN = 0;
+          for (let si = 0; si < 4; si++) {
+            const sx = Math.round(bx + ((si === 0 || si === 2) ? -subOff : subOff));
+            const sy = Math.round(by + (si < 2 ? -subOff : subOff));
+            if (sx < 1 || sy < 1 || sx >= w - 1 || sy >= h - 1) continue;
+            const i = (sy * w + sx) * 4;
+            var R = pixels[i], G = pixels[i + 1], B = pixels[i + 2];
+            if (g !== 1) {
+              R = R * g > 255 ? 255 : (R * g) | 0;
+              G = G * g > 255 ? 255 : (G * g) | 0;
+              B = B * g > 255 ? 255 : (B * g) | 0;
+            }
+            if (isPureGreen(R, G, B)) continue;
+            // 白色高亮圈：既不是墨也不是暖色，直接跳过，
+            // 否则它会把整格的 ink/warm 拉成 0。
+            if (R > 200 && G > 200 && B > 200) continue;
+            // 外圈的「红色高亮圈」：亮红、绿通道很低，和棋子盘面/红字都不同。
+            if (rr > 0.66 && R > 150 && G < 125 && (R - G) > 60) continue;
 
-          const L = 0.299 * R + 0.587 * G + 0.114 * B;
-          const rb = R - B;
-          const isWarm = (rb > 22 && R > 80);
-          const isRed = (R > 85 && (R - G) > 45 && rb > 45);
-
+            const L = 0.299 * R + 0.587 * G + 0.114 * B;
+            const rb = R - B;
+            okN++;
+            lSum += L;
+            if (rb > 22 && R > 80) { warmN++; wN++; }
+            if (R > 85 && (R - G) > 45 && rb > 45) { redN++; rN++; }
+            if (L < 72) darkN++;
+            if (L > 178) brightN++;
+            // ---- 墨迹特征（核心判据）----
+            // 棋子上的「字」是深色或红色，而棋子盘面、棋盘、绿点、高亮圈都是亮的。
+            // 区分「红字」和「暖色盘面」靠绿通道：
+            //   红字 (170, 30, 30)  G 极低（约 30）
+            //   盘面 (200,150,100)  G 中等（约 150）
+            const isRedInk = (R > 95 && G < 115 && (R - G) > 55 && (R - B) > 65);
+            const isDarkInk = (L < 85) && !isRedInk;
+            if (isRedInk || isDarkInk) iN++;
+            if (isRedInk) riN++;
+            if (isDarkInk) diN++;
+          }
+          if (!okN) { skipped++; continue; }
+          const inv = 1 / okN;
+          const idx = py * PW + px;
           patchValid[idx] = 1;
-          patchW[idx] = isWarm ? 255 : 0;
-          patchR[idx] = isRed ? 255 : 0;
+          patchW[idx] = (wN * 2 >= okN) ? 255 : 0;
+          patchR[idx] = (rN * 2 >= okN) ? 255 : 0;
+          patchI[idx] = (iN * 2 >= okN) ? 255 : 0;
 
-          sumL += L; n++;
-          if (isRed) red++;
-          if (L < 72) dark++;
-          if (L > 178) bright++;
-          if (isWarm) warm++;
-
-          // ---- 墨迹特征（核心判据）----
-          // 棋子上的「字」是深色或红色，而棋子盘面、棋盘、绿点、高亮圈都是亮的。
-          // 区分「红字」和「暖色盘面」靠绿通道：
-          //   红字 (170, 30, 30)  G 极低（约 30）
-          //   盘面 (200,150,100)  G 中等（约 150）
-          // 之前只用 R-G>45，盘面 R-G=50 也被算成红字，导致黑子全被判成红子。
-          const isRedInk = (R > 95 && G < 115 && (R - G) > 55 && (R - B) > 65);
-          const isDarkInk = (L < 85) && !isRedInk;
-          patchI[idx] = (isRedInk || isDarkInk) ? 255 : 0;
-          if (isRedInk || isDarkInk) ink++;
-          if (isRedInk) redInk++;
-          if (isDarkInk) darkInk++;
+          sumL += lSum * inv; n++;
+          red += redN * inv;
+          dark += darkN * inv;
+          bright += brightN * inv;
+          warm += warmN * inv;
+          ink += iN * inv;
+          redInk += riN * inv;
+          darkInk += diN * inv;
           // 中心 8x8 单独统计墨迹：高亮圈的深色描边只落在极外圈，
           // 全图统计会把它算成「黑墨」，于是刚走过的红仕被判成黑兵。
-          if (py >= 6 && py <= 17 && px >= 6 && px <= 17) {
+          if (inCore) {
             coreN++;
-            if (isRedInk || isDarkInk) coreInk++;
-            if (isRedInk) coreRedInk++;
-            if (isDarkInk) coreDarkInk++;
+            if (iN * 2 >= okN) coreInk++;
+            if (riN * 2 >= okN) coreRedInk++;
+            if (diN * 2 >= okN) coreDarkInk++;
           }
         }
       }
@@ -1269,7 +1302,7 @@ class BoardRecognizer {
       && this.pipRect.x1 >= pts[0] - cell * 0.6
       && this.pipRect.x0 <= pts[8 * 2] + cell * 0.6);
     if (wantPatch && this.templates && this.enableLowConfRefine) {
-      this.refineLowConfidence(out, pixels, w, h, pts, cell, radius);
+      this.refineLowConfidence(out, pixels, w, h, pts, cell, radius, gain);
     }
     return out;
   }
@@ -1287,10 +1320,10 @@ class BoardRecognizer {
    *
    * @returns {number} 被修正的格子数
    */
-  refineLowConfidence(stats, pixels, w, h, pts, cell, radius) {
-    let fixed = 0, budget = 14;
+  refineLowConfidence(stats, pixels, w, h, pts, cell, radius, gain) {
+    let fixed = 0, budget = 16;
     const OFFS = [-1, 0, 1];
-    const SCALES = [1.0, 1.16, 1.30];
+    const SCALES = [0.94, 1.0, 1.08, 1.16];
 
     for (let sq = 0; sq < 90 && budget > 0; sq++) {
       const s = stats[sq];
@@ -1301,31 +1334,53 @@ class BoardRecognizer {
       if (warm < 0.24 && inkCore < 0.10) continue;
 
       const m0 = this.matchCell(s);
-      if (m0.key !== 'E' && m0.score >= 0.55) continue;   // 已经很确定
+      // 「没把握」的两种形态：
+      //   1) 分数低 —— 字形没对上；
+      //   2) 分数不低但一二名差距很小 —— 这才是最危险的一类，
+      //      实测 r1c1 的 俥 得 0.568 排第一，可正确答案 傌 就在 0.03 分之后。
+      // 只要满足其中一条就值得重采一次。
+      const m0margin = (m0.alts && m0.alts.length > 1) ? (m0.alts[0].score - m0.alts[1].score) : 9;
+      if (m0.key !== 'E' && m0.score >= 0.62 && m0margin >= 0.10) continue;
 
       budget--;
       const cx = pts[sq * 2], cy = pts[sq * 2 + 1];
-      const off = cell * 0.09;
+      const off = cell * 0.075;
       let bestStats = s, bestScore = (m0.key === 'E') ? -2 : m0.score;
 
-      for (let si = 0; si < SCALES.length; si++) {
-        const r = Math.max(3, Math.round(radius * SCALES[si]));
-        for (let dy = 0; dy < 3; dy++) {
-          for (let dx = 0; dx < 3; dx++) {
-            if (si === 0 && dx === 1 && dy === 1) continue;  // 原位置已经试过
-            const nx = cx + OFFS[dx] * off;
-            const ny = cy + OFFS[dy] * off;
-            const ns = this.sampleCell(pixels, w, h, nx, ny, r, true);
-            const nm = this.matchCell(ns);
-            if (nm.key !== 'E' && nm.score > bestScore) {
-              bestScore = nm.score;
-              bestStats = ns;
-            }
+      // 两步走：先在同一尺度上找最佳偏移（9 次），再在最佳偏移上试尺度（4 次）。
+      // 全组合 3x3x4=36 次太贵，实测两步走命中率一样。
+      let ox = 0, oy = 0, offBest = bestScore, offStats = s;
+      for (let dy = 0; dy < 3; dy++) {
+        for (let dx = 0; dx < 3; dx++) {
+          if (dx === 1 && dy === 1) continue;   // 原位置已经试过
+          const nx = cx + OFFS[dx] * off;
+          const ny = cy + OFFS[dy] * off;
+          const ns = this.sampleCell(pixels, w, h, nx, ny, radius, true, gain);
+          const nm = this.matchCell(ns);
+          if (nm.key !== 'E' && nm.score > offBest) {
+            offBest = nm.score; offStats = ns; ox = OFFS[dx]; oy = OFFS[dy];
+          }
+        }
+      }
+      if (offStats !== s) { bestScore = offBest; bestStats = offStats; }
+
+      if (ox || oy) {
+        const bx = cx + ox * off, by = cy + oy * off;
+        for (let si = 0; si < SCALES.length; si++) {
+          if (SCALES[si] === 1.0) continue;   // 上面已经试过 1.0
+          const r = Math.max(3, Math.round(radius * SCALES[si]));
+          const ns = this.sampleCell(pixels, w, h, bx, by, r, true, gain);
+          const nm = this.matchCell(ns);
+          if (nm.key !== 'E' && nm.score > bestScore) {
+            bestScore = nm.score; bestStats = ns;
           }
         }
       }
 
-      if (bestStats !== s && bestScore >= 0.55) {
+      // 采纳条件：必须比自己原来高出一截，否则宁可不改。
+      // 只「略微更好」就替换，会把本来一次就对的格子搞坏（历史回退就是这么来的）。
+      const baseScore = (m0.key === 'E') ? -2 : m0.score;
+      if (bestStats !== s && bestScore >= 0.55 && bestScore >= baseScore + 0.10) {
         stats[sq] = bestStats;
         fixed++;
       }
@@ -1525,27 +1580,74 @@ class BoardRecognizer {
 
     let bestKey = 'E', best = -2;
     const all = [];
+    // ---- 墨迹二值图（F1 打分用）----
+    // 为什么要多算这一份：点积（余弦）只看「两个掩码同向有多长」，
+    // 笔画被采样丢掉一部分时，残留下来的墨迹跟「笔画最少的那个字」同向性最好，
+    // 于是复杂字被读成最简单的字 —— 实测就是 馬→卒、俥→仕、象→卒。
+    // F1 = 2*|交集| / (|样本| + |模板|) 同时罚「漏检」和「多检」，
+    // 少了一半笔画就会明显掉分，不会反而赢。
+    const useF1 = (this.scoreMode === 'f1') && !!stats.patchI;
+    const useMass = (this.scoreMode === 'mass') && !!stats.patchI;
+    let vb = null, vInk = 0;
+    if (useF1 || useMass) {
+      vb = stats.patchI;
+      for (let i = 0; i < n; i++) {
+        if (valid && !valid[i]) continue;
+        if (vb[i] > 0) vInk++;
+      }
+    }
+
     for (const key in this.templates) {
       const arr = this.templates[key];
       let typeBest = -9;
       for (let t = 0; t < arr.length; t++) {
         const tpl = arr[t];
-        let dotW = 0, dotR = 0, dotI = 0;
-        for (let i = 0; i < n; i++) {
-          const wi = wgt ? wgt[i] : 1;
-          dotW += wi * vw[i] * tpl.w[i];
-          dotR += wi * vr[i] * tpl.r[i];
-          if (vi && tpl.i) dotI += wi * vi[i] * tpl.i[i];
+        let score;
+        if (tpl.i && useF1) {
+          let tp = 0;
+          for (let i = 0; i < n; i++) {
+            if (vb[i] > 0 && tpl.i[i] > 0) tp++;
+          }
+          if (tpl._ni === undefined) {
+            let s2 = 0;
+            for (let i = 0; i < n; i++) if (tpl.i[i] > 0) s2++;
+            tpl._ni = s2;
+          }
+          const den = vInk + tpl._ni;
+          score = den > 0 ? (2 * tp) / den : 0;
+        } else if (tpl.i) {
+          // ★ 只算真正会用到的通道
+          //
+          // 兵种只看墨迹通道，但这里原来把暖色、红色两个点积也算了一遍再丢掉 ——
+          // 86 个模板 x 576 像素 x 3 通道，光这一项每帧就多算 15 万次乘加。
+          let dotI = 0;
+          for (let i = 0; i < n; i++) {
+            const wi = wgt ? wgt[i] : 1;
+            dotI += wi * vi[i] * tpl.i[i];
+          }
+          score = dotI;
+          if (useMass) {
+            // 笔画总量惩罚：点积对「笔画多少」不敏感，残留一半笔画时
+            // 跟「笔画最少的字」同向性反而最好（馬→卒、俥→仕 就是这么来的）。
+            // 这里按「样本墨迹量 vs 模板墨迹量」的差异打个折，把复杂度也纳入判据。
+            if (tpl._ni === undefined) {
+              let s2 = 0;
+              for (let i = 0; i < n; i++) if (tpl.i[i] > 0) s2++;
+              tpl._ni = s2;
+            }
+            const mx = vInk > tpl._ni ? vInk : tpl._ni;
+            const K = (typeof this.massK === 'number') ? this.massK : 0.35;
+            if (mx > 0) score *= (1 - K * Math.abs(vInk - tpl._ni) / mx);
+          }
+        } else {
+          let dotW = 0, dotR = 0;
+          for (let i = 0; i < n; i++) {
+            const wi = wgt ? wgt[i] : 1;
+            dotW += wi * vw[i] * tpl.w[i];
+            dotR += wi * vr[i] * tpl.r[i];
+          }
+          score = dotW + dotR * 0.3;
         }
-        // 三通道加权：暖色（盘面）+ 红色（红字）+ 墨迹（笔画形状）
-        // 只比暖色/红色时，馬 的模板对任何棋子都能拿到 1.1 分以上，
-        // 真正的車 反而只有 0.94，于是红俥被认成红傌（实测两格）。
-        // 笔画掩码直接比字形，車 和 馬 立刻分开。
-        // 【兵种只看笔画】
-        //   红子的盘面几乎都是同一块米黄圆片，暖色/红色两个通道对「是哪个子」毫无区分度，
-        //   把它们混进打分反而把字形淹掉：实测红俥排序第 4，输给了炮和相。
-        //   颜色已经由墨迹颜色单独判过（红/黑），这里只需要比字形。
-        const score = tpl.i ? dotI : (dotW + dotR * 0.3);
         if (score > typeBest) typeBest = score;
         if (score > best) { best = score; bestKey = key; }
       }

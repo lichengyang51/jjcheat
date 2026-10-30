@@ -26,7 +26,13 @@ const FIXTURES = [
   { name: 'real_442x959', truth: START_FEN },
   { name: 'user_midgame', truth: 'rnb1k1b1r/4a4/1c1R4n/p1C1p1p1p/4c4/6P2/P1P5P/R5C2/9/1NBAKABN1' },
   { name: 'user_prompt', truth: 'rnbakabnr/9/1c7/p1C1p1p1p/9/9/P1P1c1P1P/7C1/9/RNBAKABNR' },
-  { name: 'user_dots', truth: 'rnb1kab1r/9/1c1a4n/p1C1p1p1p/4c4/6P2/P1P5P/R5C2/3R5/1NBAKABN1' }
+  { name: 'user_dots', truth: 'rnb1kab1r/9/1c1a4n/p1C1p1p1p/4c4/6P2/P1P5P/R5C2/3R5/1NBAKABN1' },
+  // 团队配合 第26关：18 子的稀盘，两张不同缩放。真值是从 2 倍放大的截图
+  // 逐格肉眼核对出来的（俥 r1c1 / 傌 r2c3 / 象 r2c4 / 傌 r3c3 / 馬 r7c5）。
+  // 这张是最难的：密笔画（俥傌象馬）在 700 宽下会被采成稀笔画（仕卒），
+  // 以前一直错 4~6 格，是「复杂字被读成最简单字」这个老毛病的标准样本。
+  { name: 'puzzle26_700', truth: '2r1kabnC/1R1Pa2c1/3Nb1r2/3N5/4c4/9/9/5n3/4p4/3K5' },
+  { name: 'puzzle26_589', truth: '2r1kabnC/1R1Pa2c1/3Nb1r2/3N5/4c4/9/9/5n3/4p4/3K5' }
 ];
 
 function loadEngine() {

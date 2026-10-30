@@ -273,7 +273,7 @@ var JJEngine = {
   setCorners: function (corners) {
     session.corners = corners;
     if (!session.recognizer) {
-      session.recognizer = new REC.BoardRecognizer({ corners: corners });
+      session.recognizer = new REC.BoardRecognizer({ corners: corners, enableLowConfRefine: true });
     } else {
       session.recognizer.corners = corners.map(function (p) { return [p[0], p[1]]; });
     }
@@ -506,8 +506,47 @@ var JJEngine = {
       valid: validateCodes(codes),
       usable: codesUsable(codes),
       occupied: details.length,
-      details: details
+      details: details,
+      conf: session.recognizer.lastConf ? Array.prototype.slice.call(session.recognizer.lastConf) : null,
+      ranked: session.recognizer.lastRanked || null
     };
+  },
+
+  /**
+   * 调试：对单格做半径/偏移扫描，看「换个采样窗口这一格会变成什么」
+   * @param {number} sq 格子序号 0..89
+   * @param {number} scale 半径倍率（相对默认 radius）
+   * @param {number} dxF cell 单位的水平偏移
+   * @param {number} dyF cell 单位的垂直偏移
+   */
+  debugCell: function (pixels, w, h, sq, scale, dxF, dyF) {
+    var rec = session.recognizer;
+    if (!rec) return null;
+    var pts = rec.gridPoints();
+    var cell = rec.cellSize(pts);
+    var radius = Math.max(3, Math.round(cell * rec.cellRadiusRatio * (scale || 1)));
+    var gain = rec.estimateGain(pixels, w, h, pts);
+    var cx = pts[sq * 2] + (dxF || 0) * cell;
+    var cy = pts[sq * 2 + 1] + (dyF || 0) * cell;
+    var s = rec.sampleCell(pixels, w, h, cx, cy, radius, true, gain);
+    var m = rec.matchCell(s);
+    return {
+      key: m.key, score: m.score, warmRatio: m.warmRatio,
+      alts: (m.alts || []).map(function (a) { return [a.key, Math.round(a.score * 1000) / 1000]; }),
+      inkR: Math.round((s.inkR || 0) * 1000) / 1000,
+      warmR: Math.round((s.warmR || 0) * 1000) / 1000,
+      skipped: s.skipped || 0,
+      cell: cell, radius: radius
+    };
+  },
+
+  /** 调试：切换兵种打分方式 'dot' | 'f1' | 'mass' | 'mass:0.5'（后者同时设惩罚系数） */
+  setScoreMode: function (mode) {
+    if (!session.recognizer) return false;
+    var parts = String(mode).split(':');
+    session.recognizer.scoreMode = parts[0];
+    if (parts.length > 1) session.recognizer.massK = parseFloat(parts[1]);
+    return session.recognizer.scoreMode === parts[0];
   },
 
   /** 调试：输出 90 个格子的原始特征，用来定位「哪一格为什么判错」 */
