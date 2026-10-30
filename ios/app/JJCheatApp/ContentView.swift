@@ -58,6 +58,18 @@ struct ContentView: View {
                         .foregroundColor(.black.opacity(0.8))
                         .lineLimit(2)
                     Spacer(minLength: 0)
+                    // 一键吃最新截图：截图 → 打开 App → 点这一下，两秒出着法。
+                    // 不用再走「选图 → 相册 → 找到那张 → 选」这条四步路。
+                    Button {
+                        model.analyzeLatestScreenshot()
+                    } label: {
+                        Text("最新截图")
+                            .font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color.orange.opacity(0.9))
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
+                    }
                     if model.pickedImage != nil && !model.evConf.isEmpty {
                         Button {
                             model.showEvidence = true
@@ -391,6 +403,7 @@ struct ContentView: View {
                     menuItem("保存棋谱") {}
                     menuItem("编辑局面") { model.editMode.toggle() }
                     menuItem("拍照识别局面") { model.showCamera = true }
+                    menuItem("识别最新一张截图") { model.analyzeLatestScreenshot() }
                     menuItem("复制局面") { _ = model.copyFen() }
                     menuItem("粘贴局面") { model.pasteFen() }
                     menuItem("重新开始") { model.restart() }

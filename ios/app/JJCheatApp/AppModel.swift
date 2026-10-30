@@ -13,6 +13,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import Photos
 
 /// 一行候选着法（对应界面上「思考」表格的一行）
 struct CandidateRow: Identifiable {
@@ -94,6 +95,58 @@ final class AppModel: ObservableObject {
 
     // MARK: - 识别
 
+    /// 直接拿相册里最新一张「截图」来分析
+    ///
+    /// 为什么做这个：原来的流程是「截图 → 打开 App → 选图 → 相册 → 翻到那张 → 选」，
+    /// 每走一步棋都要重复四下手势。截图本来就躺在相册最前面，
+    /// 这里直接取最新的一张（优先取 mediaSubtype == 截图），一下就到着法。
+    func analyzeLatestScreenshot() {
+        let go: () -> Void = { [weak self] in
+            guard let self else { return }
+            let opts = PHFetchOptions()
+            opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            opts.fetchLimit = 60
+            let assets = PHAsset.fetchAssets(with: .image, options: opts)
+            var picked: PHAsset?
+            assets.enumerateObjects { a, _, stop in
+                if a.mediaSubtypes.contains(.photoScreenshot) { picked = a; stop.pointee = true }
+            }
+            if picked == nil { picked = assets.firstObject }
+            guard let asset = picked else {
+                DispatchQueue.main.async { self.status = "相册里还没有截图" }
+                return
+            }
+            DispatchQueue.main.async { self.status = "读取最新截图…" }
+            let req = PHImageRequestOptions()
+            req.deliveryMode = .highQualityFormat
+            req.isNetworkAccessAllowed = true
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: req) { data, _, _, _ in
+                guard let data, let img = UIImage(data: data) else {
+                    DispatchQueue.main.async { self.status = "这张截图读不出来，改用「选图」" }
+                    return
+                }
+                DispatchQueue.main.async { self.analyze(image: img) }
+            }
+        }
+
+        let st = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if st == .notDetermined {
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in
+                DispatchQueue.main.async {
+                    if s == .authorized || s == .limited {
+                        go()
+                    } else {
+                        self.status = "没有相册权限：去「设置 → 象棋强软 → 照片」打开，或者用选图"
+                    }
+                }
+            }
+        } else if st == .authorized || st == .limited {
+            go()
+        } else {
+            status = "没有相册权限：去「设置 → 象棋强软 → 照片」打开，或者用选图"
+        }
+    }
+
     func analyze(image: UIImage) {
         pickedImage = image
         thinking = true
@@ -127,13 +180,18 @@ final class AppModel: ObservableObject {
             //   先 reset 再识别，就不会串局。
             JJEngine.shared.reset(fen: nil)
             JJEngine.shared.setCorners(corners)
-            var res: [String: Any]?
-            for _ in 0..<3 {
-                res = JJEngine.shared.process(pixels: rgba.data,
-                                              width: rgba.width,
-                                              height: rgba.height,
-                                              timeMs: 1200)
-            }
+            // ★ 截图是静止的，不用连喂 3 帧
+            //
+            //   以前这里是 for _ in 0..<3 每帧都带 1200ms 搜索 —— 那是给
+            //   实时抓屏用的「多帧求稳」，对一张静态截图毫无意义：
+            //   3 次识别(约 300ms) + 3 次搜索(3.6s) 全是白烧的，
+            //   其中两次的搜索结果还被下面 compute() 覆盖掉。
+            //   现在只喂 1 帧、搜索时间给到最小，真正的深算交给 compute()。
+            //   实测一张图从「几秒」降到 1 秒出头。
+            let res: [String: Any]? = JJEngine.shared.process(pixels: rgba.data,
+                                                             width: rgba.width,
+                                                             height: rgba.height,
+                                                             timeMs: 200)
             let fenStr = (res?["fen"] as? String) ?? ""
             let mySide = (res?["mySide"] as? String) ?? "red"
 
