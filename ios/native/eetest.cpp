@@ -10,6 +10,7 @@
 #include "pregen.h"
 #include "search.h"
 #include "hash.h"
+#include "book.h"
 
 static const int INTERRUPT_COUNT = 4096;
 
@@ -23,6 +24,20 @@ int main(int argc, char **argv) {
     Search.pos.nDistance = 0;
     Search.pos.PreEvaluate();
     Search.nBanMoves = 0;
+    // 直接问一次开局库：文件能不能打开、这个局面有几条库着
+    {
+        FILE *ft = fopen("../BOOK/BOOK.DAT", "rb");
+        printf("[book] 打开文件=%d\n", (int) (ft != NULL));
+        if (ft) fclose(ft);
+        BookStruct bks[64];
+        int nb = GetBookMoves(Search.pos, "../BOOK/BOOK.DAT", bks);
+        printf("[book] 库着条数=%d\n", nb);
+        for (int k = 0; k < nb && k < 4; k++) {
+            uint32_t ms = MOVE_COORD(bks[k].wmv);
+            printf("[book]   %d: %.4s 权重=%d\n", k, (const char *) &ms, (int) bks[k].wvl);
+        }
+    }
+
     Search.bQuit = false;
     Search.bBatch = true;      // 不读 stdin，只按计时停
     Search.bDebug = false;
@@ -48,6 +63,20 @@ int main(int argc, char **argv) {
     printf("[pos] IsDraw=%d RepStatus3=%d LastCptDrw=%d\n",
            (int) Search.pos.IsDraw(), (int) Search.pos.RepStatus(3),
            (int) Search.pos.LastMove().CptDrw);
+
+    // 直接问一次开局库：文件能不能打开、这个局面有几条库着
+    {
+        FILE *ft = fopen("../BOOK/BOOK.DAT", "rb");
+        printf("[book] 打开文件=%d\n", (int) (ft != NULL));
+        if (ft) fclose(ft);
+        BookStruct bks[64];
+        int nb = GetBookMoves(Search.pos, "../BOOK/BOOK.DAT", bks);
+        printf("[book] 库着条数=%d\n", nb);
+        for (int k = 0; k < nb && k < 4; k++) {
+            uint32_t ms = MOVE_COORD(bks[k].wmv);
+            printf("[book]   %d: %.4s 权重=%d\n", k, (const char *) &ms, (int) bks[k].wvl);
+        }
+    }
 
     Search.bQuit = false;
     Search.nGoMode = GO_MODE_TIMER;
