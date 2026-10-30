@@ -176,7 +176,7 @@ final class AppModel: ObservableObject {
                 }
                 // 留证页用的是「截图原样」的格子（因为它裁的就是截图里的像素），
                 // 所以这里必须用屏幕坐标解析一份，不能拿引擎坐标的 board 去对。
-                self.evChars = Self.parseFenChars(fenStr)
+                self.evChars = Self.parseFenChars(fenStr).map { $0 ?? Character(".") }
                 self.evConf = conf90
                 self.evTops = tops90
                 self.evImgW = rgba.width
