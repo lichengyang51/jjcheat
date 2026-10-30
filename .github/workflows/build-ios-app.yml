@@ -53,10 +53,10 @@ jobs:
           sh ../scripts/net.sh
           ls -la pikafish.nnue
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          SRC="$(find . -name '*.cpp' | tr '\n' ' ')"
+          SRC="$(find . -name '*.cpp' -not -path './universal/*' -not -name '*amd64*' | tr '\n' ' ')"
           xcrun --sdk iphoneos clang++ \
             -dynamiclib -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
-            -std=c++17 -O3 -fPIC -fno-exceptions -DNDEBUG -DIS_64BIT \
+            -std=c++17 -O3 -fPIC -fno-exceptions -DNDEBUG -DIS_64BIT -march=armv8.2-a+dotprod \
             -DUSE_POPCNT -DUSE_NEON=8 -DUSE_NEON_DOTPROD \
             -install_name @rpath/libpikafish.dylib \
             -I. $SRC ../../pf_bridge.cpp \
