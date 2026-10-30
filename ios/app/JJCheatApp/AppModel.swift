@@ -138,12 +138,14 @@ final class AppModel: ObservableObject {
             let mySide = (res?["mySide"] as? String) ?? "red"
 
             // 留证数据：四角 / 每格字符 / 置信度 / 候选
-            let conf90 = (res?["conf90"] as? [Any])?.map { ( as? Double) ?? Double(( as? Int) ?? 0) } ?? []
+            let conf90: [Double] = (res?["conf90"] as? [Any])?.map { item in
+                (item as? Double) ?? Double((item as? Int) ?? 0)
+            } ?? []
             var tops90: [[Int]] = []
             if let raw90 = res?["tops90"] as? [Any] {
                 for item in raw90 {
                     if let arr = item as? [Any] {
-                        tops90.append(arr.map { Int(( as? Double) ?? Double(( as? Int) ?? 0)) })
+                        tops90.append(arr.map { v in Int((v as? Double) ?? Double((v as? Int) ?? 0)) })
                     } else {
                         tops90.append([])
                     }
@@ -162,7 +164,7 @@ final class AppModel: ObservableObject {
                 } else {
                     self.evCorners = corners
                 }
-                self.evChars = self.board.map {  ?? Character(".") }
+                self.evChars = self.board.map { piece in piece ?? Character(".") }
                 self.evConf = conf90
                 self.evTops = tops90
                 self.evImgW = rgba.width
