@@ -96,7 +96,7 @@ struct ChessBoardView: View {
 
         // 九宫位置的小角标（照真实棋盘）
         var ticks = Path()
-        let marks: [(Int, Int, Int, Int)] = [(0,3),(0,5),(2,3),(2,5),(7,3),(7,5),(9,3),(9,5)]
+        let marks: [(Int, Int)] = [(0,3),(0,5),(2,3),(2,5),(7,3),(7,5),(9,3),(9,5)]
         for (r, c) in marks {
             let x = ox + CGFloat(c) * cell
             let y = oy + CGFloat(disp(r)) * cell

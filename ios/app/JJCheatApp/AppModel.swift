@@ -218,12 +218,17 @@ final class AppModel: ObservableObject {
     /// 左右翻页：在候选着法之间走
     func demoStep(_ delta: Int) {
         guard !rows.isEmpty else { return }
-        let cur = rows.firstIndex(where: { .move == rows.first(where: { .chinese == bestChinese })?.move }) ?? 0
+        var cur = 0
+        for (i, r) in rows.enumerated() where r.chinese == bestChinese {
+            cur = i
+            break
+        }
         var next = cur + delta
         if next < 0 { next = 0 }
         if next >= rows.count { next = rows.count - 1 }
         pickRow(rows[next])
     }
+
     // MARK: - 编辑
 
     func tapSquare(_ sq: Int) {
