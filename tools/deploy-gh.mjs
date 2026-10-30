@@ -234,16 +234,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     // 硬校验：ipa 里必须带 engine.js 和录屏扩展，否则装上也是废的
     const listing = sh('tar', ['-tf', ipaPath], ROOT).out;
     const hasEngine = listing.includes('engine.js');
-    const hasAppex = listing.includes('JJCheatBroadcast.appex/JJCheatBroadcast');
+    // 录屏扩展已移除（改成拍照/截图识别），不再校验 appex
+const hasAppex = true;
     const hasApp = listing.includes('JJCheatApp.app/JJCheatApp');
 
     console.log('      ipa 已就绪：' + ipaPath + '  (' + (sz / 1024 / 1024).toFixed(2) + ' MB)');
     console.log('      内容校验：');
     console.log('        主程序          ' + (hasApp ? 'OK' : '缺失 <<<'));
-    console.log('        录屏扩展        ' + (hasAppex ? 'OK' : '缺失 <<<'));
+    
     console.log('        engine.js       ' + (hasEngine ? 'OK' : '缺失 <<<'));
 
-    if (!hasEngine || !hasAppex || !hasApp) {
+    if (!hasEngine || !hasApp) {
       console.error('\n包不完整，先别装。把这段报错发我。');
       process.exit(12);
     }
