@@ -30,7 +30,7 @@ jobs:
           clang++ -std=c++11 -O2 -DNDEBUG -I. -I../base \
             $GITHUB_WORKSPACE/ios/native/eetest.cpp \
             position.cpp pregen.cpp search.cpp hash.cpp evaluate.cpp \
-            genmoves.cpp movesort.cpp preeval.cpp book.cpp ucci.cpp pipe.cpp ../base/pipe.cpp \
+            genmoves.cpp movesort.cpp preeval.cpp book.cpp ucci.cpp ../base/pipe.cpp \
             -o /tmp/eetest
           ls -la /tmp/eetest
 
