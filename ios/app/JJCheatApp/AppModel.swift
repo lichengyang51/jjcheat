@@ -341,6 +341,15 @@ final class AppModel: ObservableObject {
         LiveEngine.shared.onStats = { [weak self] seen, ms, size in
             guard let self else { return }
             self.liveInfo = "\(seen) 帧 · \(ms)ms · \(Int(size.width))×\(Int(size.height))"
+            if self.rows.isEmpty {
+                PiPController.shared.waiting("正在识别 · 已收 \(seen) 帧")
+            }
+        }
+        LiveEngine.shared.onTick = { [weak self] n in
+            guard let self else { return }
+            if self.rows.isEmpty && n % 5 == 1 {
+                PiPController.shared.waiting("正在识别 · 已收 \(n) 帧")
+            }
         }
         LiveEngine.shared.start()
         liveActive = true
@@ -350,7 +359,7 @@ final class AppModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             BroadcastPickerHolder.shared.trigger()
         }
-        status = "浮窗已开 · 在系统面板里点「开始直播」，浮窗会跟着棋局实时更新"
+        status = "浮窗已开 · 在系统面板点「开始直播」；浮窗上会显示已收帧数"
     }
 
     func stopFloating() {

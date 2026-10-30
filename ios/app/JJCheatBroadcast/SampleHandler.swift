@@ -106,6 +106,17 @@ final class SampleHandler: RPBroadcastSampleHandler {
         if sampleBufferCount <= 3 || sampleBufferCount % heartbeatEvery == 0 {
             client?.send(JJFrameHeader.heartbeat().encoded())
         }
+        if sampleBufferCount <= 3 {
+            if let pb = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                let f = CVPixelBufferGetPixelFormatType(pb)
+                let b0 = UInt8((f >> 24) & 0xff), b1 = UInt8((f >> 16) & 0xff)
+                let b2 = UInt8((f >> 8) & 0xff), b3 = UInt8(f & 0xff)
+                let tag = String(bytes: [b0, b1, b2, b3], encoding: .ascii) ?? "?"
+                NSLog("[JJCheat/bc] 帧格式 %@ 尺寸 %dx%d 平面 %d", tag,
+                      CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb),
+                      CVPixelBufferGetPlaneCount(pb))
+            }
+        }
 
         if sampleBufferCount % stride != 0 { return }
 
@@ -113,7 +124,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
             failedCount &+= 1
             return
         }
-        guard let frame = makeRGBA(from: pixelBuffer, downscale: downscale) else {
+        // 目标宽度 ~700：模板是 48~80px 格距生成的，700 宽时格距约 76，
+        // 正好对上。原生 1320 宽直接发过去，一帧 15MB、每秒几百 MB，
+        // 回环也会拥塞，而且引擎还得自己再缩一次，纯浪费。
+        let srcW = CVPixelBufferGetWidth(pixelBuffer)
+        let ds = max(1, Int((Double(srcW) / 700.0).rounded()))
+        guard let frame = makeRGBA(from: pixelBuffer, downscale: ds) else {
             failedCount &+= 1
             return
         }
@@ -137,6 +153,13 @@ final class SampleHandler: RPBroadcastSampleHandler {
         var data: Data
     }
 
+    /// 像素格式的 4 字符码（'xf20' 之类）
+    static func fourCC(_ s: String) -> OSType {
+        var r: OSType = 0
+        for u in s.utf8 { r = (r << 8) | OSType(u) }
+        return r
+    }
+
     @inline(__always)
     private func clamp255(_ v: Int) -> UInt8 {
         if v < 0 { return 0 }
@@ -158,10 +181,47 @@ final class SampleHandler: RPBroadcastSampleHandler {
 
         let fmt = CVPixelBufferGetPixelFormatType(px)
         let planes = CVPixelBufferGetPlaneCount(px)
+        // iOS 26 的 ReplayKit 在 A18 上会直接给 10bit 双平面：
+        //   'xf20' = 420YpCbCr10BiPlanarFullRange，'x420' = 视频范围
+        // 每个采样 16 位，Y 只有 10 位有效值。当成 8 位读会得到满屏噪点，
+        // 引擎一辈子认不出棋盘 —— 表现就是浮窗一直「正在识别」。
+        let is10bit = (fmt == Self.fourCC("xf20") || fmt == Self.fourCC("x420")
+                       || fmt == Self.fourCC("l10r") || fmt == Self.fourCC("420p"))
         var out = Data(count: dh * rowBytes)
         var filled = false
 
-        if CVPixelBufferIsPlanar(px) && planes >= 2 {
+        if is10bit && planes >= 2 {
+            guard let yBase = CVPixelBufferGetBaseAddressOfPlane(px, 0),
+                  let uvBase = CVPixelBufferGetBaseAddressOfPlane(px, 1) else { return nil }
+            let yBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 0)
+            let uvBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 1)
+            let y16 = yBase.assumingMemoryBound(to: UInt16.self)
+            let uv16 = uvBase.assumingMemoryBound(to: UInt16.self)
+            let yStride = yBpr / 2
+            let uvStride = uvBpr / 2
+            out.withUnsafeMutableBytes { raw in
+                guard let dst = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+                for y in 0..<dh {
+                    let sy = y * downscale
+                    let dRow = dst + y * rowBytes
+                    for x in 0..<dw {
+                        let sx = x * downscale
+                        let Y10 = Int(y16[sy * yStride + sx]) >> 2
+                        let ux = (sx >> 1) << 1
+                        let cb = (Int(uv16[(sy >> 1) * uvStride + ux]) - 512) / 4
+                        let cr = (Int(uv16[(sy >> 1) * uvStride + ux + 1]) - 512) / 4
+                        let r = Y10 + ((91881 * cr) >> 16)
+                        let g = Y10 - ((22554 * cb + 46802 * cr) >> 16)
+                        let b = Y10 + ((116130 * cb) >> 16)
+                        dRow[x * 4 + 0] = clamp255(r)
+                        dRow[x * 4 + 1] = clamp255(g)
+                        dRow[x * 4 + 2] = clamp255(b)
+                        dRow[x * 4 + 3] = 255
+                    }
+                }
+            }
+            filled = true
+        } else if CVPixelBufferIsPlanar(px) && planes >= 2 {
             guard let yBase = CVPixelBufferGetBaseAddressOfPlane(px, 0),
                   let uvBase = CVPixelBufferGetBaseAddressOfPlane(px, 1) else { return nil }
             let yBpr = CVPixelBufferGetBytesPerRowOfPlane(px, 0)
