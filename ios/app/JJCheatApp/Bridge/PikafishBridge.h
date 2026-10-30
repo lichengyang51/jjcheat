@@ -13,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)available;
 
 /// 给一个 FEN（含走子方），返回 UCCI 着法（如 "h7e7"）；拿不到返回 nil
-+ (nullable NSString *)bestMoveForFen:(NSString *)fen movetimeMs:(int)ms;
++ (nullable NSString *)bestMove:(NSString *)fen movetimeMs:(int)ms;
 
 /// 局面变了清一下置换表里的旧东西（可选，不清也没问题）
 + (void)clear;

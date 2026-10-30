@@ -435,7 +435,11 @@ final class AppModel: ObservableObject {
         }
         LiveEngine.shared.start()
         liveActive = true
-        hasPikafish = PikafishBridge.available()
+        // 皮卡鱼探活放后台：首次要初始化 NNUE 网络，会卡一两秒
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let ok = PikafishBridge.available()
+            DispatchQueue.main.async { self?.hasPikafish = ok }
+        }
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
         // 先让浮窗动画起来，再弹录屏面板 —— 两个系统弹窗挤在同一帧会互相打断

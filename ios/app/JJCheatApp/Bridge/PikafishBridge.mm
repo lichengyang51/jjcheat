@@ -14,12 +14,22 @@ int  pf_bestmove(const char *fen, int movetimeMs, char *out, int outLen);
 @implementation PikafishBridge
 
 + (BOOL)available {
-    char buf[32];
-    int rc = pf_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w", 30, buf, sizeof(buf));
-    return rc == 0;
+    // 只探一次：初始化 NNUE 网络要一两秒，每步都探等于每步都卡一下
+    static BOOL ok = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        char buf[32];
+        buf[0] = 0;
+        int rc = pf_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
+                             50, buf, sizeof(buf));
+        ok = (rc == 0);
+        NSLog(@"[JJCheat] 皮卡鱼可用: %d", (int)ok);
+    });
+    return ok;
 }
 
-+ (NSString *)bestMoveForFen:(NSString *)fen movetimeMs:(int)ms {
+// Swift 会把 bestMoveForFen:movetimeMs: 导入成 bestMove(forFen:movetimeMs:)
++ (nullable NSString *)bestMove:(NSString *)fen movetimeMs:(int)ms {
     char buf[32];
     buf[0] = 0;
     int rc = pf_bestmove(fen.UTF8String, ms, buf, sizeof(buf));
