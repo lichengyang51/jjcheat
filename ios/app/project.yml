@@ -67,6 +67,16 @@ targets:
         OTHER_LDFLAGS:
           - "-force_load"
           - "$(SRCROOT)/native/pikafish/src/libpikafish.a"
+        # 皮卡鱼是 C++17 + 64 位 + NEON；这几个宏必须和静态库那边的编译选项一致，
+        # 否则头里的 Bitboard(128 位) 等类型对不上，直接编不过。
+        CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+        CLANG_CXX_LIBRARY: "libc++"
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - "$(inherited)"
+          - "IS_64BIT=1"
+          - "USE_POPCNT=1"
+          - "USE_NEON=8"
+          - "USE_NEON_DOTPROD=1"
     dependencies:
       - target: JJCheatBroadcast
         embed: true
