@@ -1334,6 +1334,11 @@ class BoardRecognizer {
       if (warm < 0.24 && inkCore < 0.10) continue;
 
       const m0 = this.matchCell(s);
+      // 空格的 warm 占比也可能很高（棋盘底色就是暖色），
+      // 这些格子进来只会白吃预算。实测预算 16 个格子会被一条空行吃光，
+      // 真正需要重采的低分棋子反而轮不到 —— 这就是 r7c5 明明有 0.512 的
+      // 更好结果却一直没被采纳的原因。
+      if (m0.score < 0.10) continue;
       // 「没把握」的两种形态：
       //   1) 分数低 —— 字形没对上；
       //   2) 分数不低但一二名差距很小 —— 这才是最危险的一类，
@@ -1379,8 +1384,13 @@ class BoardRecognizer {
 
       // 采纳条件：必须比自己原来高出一截，否则宁可不改。
       // 只「略微更好」就替换，会把本来一次就对的格子搞坏（历史回退就是这么来的）。
+      //
+      // 绝对下限 0.30 而不是 0.55：像「团队配合 26 关」这种子被放大 + 红圈的盘面，
+      // 整盘分数都被压到 0.25~0.6（正确棋子也只有 0.4 左右），
+      // 用 0.55 当门槛会把本来能救回来的格子全部拒掉。
+      // 真正防回退的是下面那条「至少高 0.12」。
       const baseScore = (m0.key === 'E') ? -2 : m0.score;
-      if (bestStats !== s && bestScore >= 0.55 && bestScore >= baseScore + 0.10) {
+      if (bestStats !== s && bestScore >= 0.30 && bestScore >= baseScore + 0.12) {
         stats[sq] = bestStats;
         fixed++;
       }
@@ -1725,6 +1735,19 @@ class BoardRecognizer {
       // 3) 模板只用来认兵种
       const r = this.matchCell(s);
       conf[sq] = r.score;
+      // 分数低到个位数 = 这一格根本没有字形。
+      //
+      // 为什么需要这条：上面 hasFace 是「暖色占比」，可棋盘底色本身就是暖色的，
+      // 空格配上一点网格线就能过 hasFace，然后模板比出来的分数只有 0.01~0.02，
+      // 随便挑个相似的兵种就填上去了 —— 实测 user_dots 的 r6c6 是空格，
+      // 墨迹 0.003、模板分 0.016，被读成了红仕。
+      // 真棋子在这个尺度下最低也有 0.25 以上，所以 0.10 这条线足够安全。
+      if (r.score < 0.10) {
+        grid[sq] = EMPTY;
+        codes[sq] = 0;
+        tplFail++;
+        continue;
+      }
       // 记下「第一名和第二名的分差」—— 分差小说明没把握，数量约束修复只动这些格子
       margins[sq] = (r.alts && r.alts.length > 1) ? (r.alts[0].score - r.alts[1].score) : 99;
 
