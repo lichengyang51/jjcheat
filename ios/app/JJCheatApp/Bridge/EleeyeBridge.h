@@ -17,6 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 给 FEN（含走子方）算出 UCCI 着法，如 "h2e2"；失败返回 nil
 + (nullable NSString *)bestMove:(NSString *)fen movetimeMs:(int)ms;
 
+/// 重新探测一次（抽屉里的「重试引擎」用）
++ (BOOL)retry;
+
 /// 上一次失败原因（显示在抽屉里）
 + (NSString *)lastError;
 

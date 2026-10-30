@@ -16,23 +16,34 @@ static NSString *g_err = @"未尝试";
 
 @implementation EleeyeBridge
 
+static BOOL g_checked = NO;
+static BOOL g_ok = NO;
+
++ (BOOL)probe {
+    char buf[32];
+    buf[0] = 0;
+    int rc = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mtx);
+        rc = ee_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
+                         100, buf, sizeof(buf));
+    }
+    g_ok = (rc == 0 && buf[0] != 0);
+    g_err = g_ok ? @"象眼已就绪" : [NSString stringWithFormat:@"象眼不可用 rc=%d", rc];
+    g_checked = YES;
+    NSLog(@"[JJCheat] %@", g_err);
+    return g_ok;
+}
+
 + (BOOL)available {
-    static BOOL ok = NO;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        char buf[32];
-        buf[0] = 0;
-        int rc = 0;
-        {
-            std::lock_guard<std::mutex> lock(g_mtx);
-            rc = ee_bestmove("rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w",
-                             100, buf, sizeof(buf));
-        }
-        ok = (rc == 0 && buf[0] != 0);
-        g_err = ok ? @"象眼已就绪" : [NSString stringWithFormat:@"象眼不可用 rc=%d", rc];
-        NSLog(@"[JJCheat] %@", g_err);
-    });
-    return ok;
+    if (!g_checked) [self probe];
+    return g_ok;
+}
+
++ (BOOL)retry {
+    g_checked = NO;
+    g_ok = NO;
+    return [self probe];
 }
 
 + (nullable NSString *)bestMove:(NSString *)fen movetimeMs:(int)ms {

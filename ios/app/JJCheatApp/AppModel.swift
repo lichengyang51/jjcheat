@@ -106,6 +106,7 @@ final class AppModel: ObservableObject {
     // MARK: - 启动
 
     func bootstrap() {
+        probeEngines()   // 启动就探一次，抽屉里直接能看到引擎状态
         guard !started else { return }
         started = true
         _ = JJEngine.shared
@@ -445,20 +446,7 @@ final class AppModel: ObservableObject {
         LiveEngine.shared.start()
         liveActive = true
         // 皮卡鱼探活放后台：首次要初始化 NNUE 网络，会卡一两秒
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let eeOK = EleeyeBridge.available()
-            let eeMsg = EleeyeBridge.lastError()
-            let pfOK = PikafishBridge.available()
-            let pfMsg = PikafishBridge.lastError()
-            DispatchQueue.main.async {
-                self?.hasPikafish = eeOK || pfOK
-                if eeOK {
-                    self?.engineStatus = "象眼已就绪" + (pfOK ? "（皮卡鱼也已加载）" : "")
-                } else {
-                    self?.engineStatus = "象眼不可用：" + eeMsg + " · 皮卡鱼：" + pfMsg
-                }
-            }
-        }
+        probeEngines()
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
         // 先让浮窗动画起来，再弹录屏面板 —— 两个系统弹窗挤在同一帧会互相打断
@@ -468,17 +456,38 @@ final class AppModel: ObservableObject {
         status = "浮窗已开 · 在系统面板点「开始直播」；浮窗上会显示已收帧数"
     }
 
+    private var engineProbed = false
+
+    /// 探测两个引擎（启动时 / 连接浮窗前都会跑一次，抽屉里就能看到状态）
+    func probeEngines(force: Bool = false) {
+        if engineProbed && !force { return }
+        engineProbed = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let eeOK = force ? EleeyeBridge.retry() : EleeyeBridge.available()
+            let eeMsg = EleeyeBridge.lastError()
+            let pfOK = force ? PikafishBridge.retryLoad() : PikafishBridge.available()
+            let pfMsg = PikafishBridge.lastError()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.hasPikafish = eeOK || pfOK
+                if eeOK {
+                    self.engineStatus = pfOK ? "象眼已就绪（皮卡鱼也可用）" : "象眼已就绪"
+                } else if pfOK {
+                    self.engineStatus = "皮卡鱼已就绪（象眼不可用：" + eeMsg + "）"
+                } else {
+                    self.engineStatus = "都不可用 · 象眼：" + eeMsg + " · 皮卡鱼：" + pfMsg
+                }
+            }
+        }
+    }
+
     /// 抽屉里的「重试引擎」
     func retryEngine() {
-        status = "正在重试加载皮卡鱼…"
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let ok = PikafishBridge.retryLoad()
-            let msg = PikafishBridge.lastError()
-            DispatchQueue.main.async {
-                self?.hasPikafish = ok
-                self?.engineStatus = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
-                self?.status = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
-            }
+        status = "正在重试引擎…"
+        probeEngines(force: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self else { return }
+            self.status = "引擎: " + self.engineStatus
         }
     }
 
