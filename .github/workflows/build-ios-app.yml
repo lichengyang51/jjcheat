@@ -47,9 +47,9 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          mkdir -p ios/native
-          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git ios/native/pikafish || exit 0
-          cd ios/native/pikafish/src
+          mkdir -p ios/app/native
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git ios/app/native/pikafish || exit 0
+          cd ios/app/native/pikafish/src
           sh ../scripts/net.sh || true
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           make -j4 build ARCH=apple-silicon COMP=clang \
@@ -59,7 +59,7 @@ jobs:
 
       - name: 皮卡鱼没编成时放个空库（保证链接不失败）
         run: |
-          LIB=ios/native/pikafish/src/libpikafish.a
+          LIB=ios/app/native/pikafish/src/libpikafish.a
           if [ ! -f "$LIB" ]; then
             echo "皮卡鱼没编成，放空库"
             mkdir -p "$(dirname "$LIB")"
