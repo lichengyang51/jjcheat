@@ -61,6 +61,8 @@ final class AppModel: ObservableObject {
 
     /// 思考时长（秒），对应设置页的「局时」
     @Published var thinkSeconds: Double = 3.0
+    /// 编辑模式：打开后点棋盘才会改子，平时点棋盘不动
+
 
     let buildTag: String = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
 
@@ -82,15 +84,22 @@ final class AppModel: ObservableObject {
     // MARK: - 识别
 
     func analyze(image: UIImage) {
-        guard let rgba = ScreenshotReader.rgba(from: image) else {
-            status = "这张图读不出来，换一张"
-            return
-        }
         thinking = true
-        status = "识别中… \(rgba.width)×\(rgba.height)"
+        status = "识别中…（这步要几秒，别退出）"
 
+        // 缩图 + 转换都放到后台队列，别卡界面
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
+            guard let rgba = ScreenshotReader.rgba(from: image) else {
+                DispatchQueue.main.async {
+                    self.thinking = false
+                    self.status = "这张图读不出来，换一张试试"
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                self.status = "识别中… \(rgba.width)×\(rgba.height)"
+            }
             guard let corners = JJEngine.shared.autoDetectBoard(pixels: rgba.data,
                                                                width: rgba.width,
                                                                height: rgba.height) else {
@@ -131,7 +140,6 @@ final class AppModel: ObservableObject {
         guard !thinking else { return }
         thinking = true
         rows = []
-        status = "思考中…"
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
         let ms = Int(max(0.4, thinkSeconds) * 1000)
         let t0 = Date()
@@ -172,7 +180,6 @@ final class AppModel: ObservableObject {
                     self.fromSq = -1
                     self.toSq = -1
                 }
-                self.status = self.bestChinese.isEmpty ? "没算出着法" : "已出招"
             }
         }
     }
@@ -232,6 +239,7 @@ final class AppModel: ObservableObject {
     // MARK: - 编辑
 
     func tapSquare(_ sq: Int) {
+        guard editMode else { return }          // 平时点棋盘不改任何东西，避免误擦
         guard sq >= 0, sq < 90 else { return }
         guard let kind = pickedKind else {
             board[sq] = nil

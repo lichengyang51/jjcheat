@@ -32,10 +32,25 @@ struct ContentView: View {
                 .aspectRatio(8.0 / 9.0, contentMode: .fit)
                 .padding(.horizontal, 4)
 
+                // 识别/操作状态（显眼一点，别缩在页面最底下）
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.thinking ? Color.orange : Color.green)
+                        .frame(width: 7, height: 7)
+                    Text(model.status)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.black.opacity(0.8))
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(model.thinking ? Color.orange.opacity(0.14) : Color.green.opacity(0.12))
                 statusLine
                 tabBar
                 engineToolbar
                 Divider()
+                piecePicker
                 candidateTable
                 Spacer(minLength: 0)
             }
@@ -206,6 +221,49 @@ struct ContentView: View {
         .background(Color.white)
     }
 
+    // MARK: - 摆子（改错子）
+
+    private var piecePicker: some View {
+        HStack(spacing: 6) {
+            Button {
+                model.editMode.toggle()
+            } label: {
+                Text(model.editMode ? "退出编辑" : "编辑局面")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(model.editMode ? Color.red.opacity(0.85) : Color.gray.opacity(0.2))
+                    .foregroundColor(model.editMode ? .white : .primary)
+                    .cornerRadius(6)
+            }
+            if model.editMode {
+                Button {
+                    model.pickedKind = nil
+                } label: {
+                    Text("擦")
+                        .font(.system(size: 11, weight: .bold))
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(model.pickedKind == nil ? Color.red.opacity(0.85) : Color.gray.opacity(0.2))
+                        .foregroundColor(model.pickedKind == nil ? .white : .primary)
+                        .cornerRadius(6)
+                }
+                ForEach(PieceKind.allCases) { k in
+                    Button {
+                        model.pickedKind = k
+                    } label: {
+                        Text(k.cn)
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(model.pickedKind == k ? Color.blue.opacity(0.85) : Color.gray.opacity(0.2))
+                            .foregroundColor(model.pickedKind == k ? .white : .primary)
+                            .cornerRadius(6)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+    }
     // MARK: - 候选着法表
 
     private var candidateTable: some View {
