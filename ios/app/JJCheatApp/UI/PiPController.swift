@@ -69,13 +69,16 @@ final class PiPController: NSObject {
         onStateChange?(false, nil)
     }
 
-    /// 推内容进浮窗（版式固定成鹏飞那样：小棋盘 + 一行大字着法）
-    func update(fen: String, moveChinese: String, fromSq: Int, toSq: Int, redAtBottom: Bool, hint: String) {
+    /// 推内容进浮窗（版式固定成鹏飞那样：小棋盘 + 深度/用时/分数/候选着法）
+    func update(fen: String, arrowFrom: Int, arrowTo: Int,
+                depth: Int, secs: Double, score: Int, moves: [String], hint: String) {
         panel.apply(fen: fen,
-                    moveChinese: moveChinese,
-                    fromSq: fromSq,
-                    toSq: toSq,
-                    redAtBottom: redAtBottom,
+                    arrowFrom: arrowFrom,
+                    arrowTo: arrowTo,
+                    depth: depth,
+                    secs: secs,
+                    score: score,
+                    moves: moves,
                     hint: hint)
     }
 

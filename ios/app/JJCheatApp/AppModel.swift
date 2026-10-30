@@ -75,6 +75,8 @@ final class AppModel: ObservableObject {
     @Published var thinkSeconds: Double = 3.0
     /// 画中画浮窗是否开着
     @Published var pipActive = false
+    /// 当前局面分数（数值，浮窗要显示「分数: N」）
+    @Published var scoreValue: Int = 0
     /// 浮窗在上一张截图里盖住了几格（引擎按洋红边框算出来的）
     @Published var pipCells: Int = 0
     /// 实时模式（录屏 + 浮窗）是否开着
@@ -258,12 +260,14 @@ final class AppModel: ObservableObject {
 
     // MARK: - 计算（多候选）
 
-    func compute() {
+    /// - Parameter limitSeconds: 实时模式下用它把思考时间压短（否则 3 秒一帧太慢）
+    func compute(limitSeconds: Double? = nil) {
         guard !thinking else { return }
         thinking = true
         rows = []
         let full = fenFromBoard() + " " + (redAtBottom ? "w" : "b") + " - - 0 1"
-        let ms = Int(max(0.4, thinkSeconds) * 1000)
+        let budget = limitSeconds ?? thinkSeconds
+        let ms = Int(max(0.4, budget) * 1000)
         let t0 = Date()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -287,6 +291,7 @@ final class AppModel: ObservableObject {
                     self.scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
                 }
                 self.winratePct = JJEngine.double(res, "winrate", 50)
+                self.scoreValue = sc
 
                 var list: [CandidateRow] = []
                 if let raw = res?["rows"] as? [[String: Any]] {
@@ -317,6 +322,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - 画中画浮窗（鹏飞式小窗）
 
+    private var lastLiveAnalyze = Date.distantPast
     private var pipAnchor: UIView?
 
     func setPipAnchor(_ v: UIView) { pipAnchor = v }
@@ -383,6 +389,15 @@ final class AppModel: ObservableObject {
         winratePct = JJEngine.double(res, "winrate", 50)
         depth = JJEngine.int(res, "depth", 0)
         status = "实时 · \(liveInfo) · \(redAtBottom ? "你执红" : "你执黑")"
+
+        // 浮窗右边要显示「深度 / 用时 / 分数 / 3 个候选着法」，
+        // 这些必须真的搜一次才有 —— process 只给一个着法。
+        // 1.2 秒最多搜一次，不然每帧都搜会把识别挤掉。
+        let now = Date()
+        if now.timeIntervalSince(lastLiveAnalyze) > 1.2 {
+            lastLiveAnalyze = now
+            compute(limitSeconds: 0.8)
+        }
         _ = rawFen
         refreshPanel()
     }
@@ -418,21 +433,24 @@ final class AppModel: ObservableObject {
 
     /// 把当前结论推到浮窗
     ///
-    /// 版式照鹏飞：右边只有一行大字，带来源前缀 —— 鹏飞是「库: 兵七进一」（开局库），
-    /// 我们是引擎算的，所以写「引擎: 卒1进1」。没招的时候就显示「正在识别」。
+    /// 版式照鹏飞：右边四行「深度 / 用时 / 分数 / 候选着法」。
     func refreshPanel() {
         guard PiPController.shared.isActive else { return }
         let hint: String = pipCells > 0 ? "浮窗挡住 \(pipCells) 格，往边上拖" : ""
-        if bestChinese.isEmpty {
+        var mv = rows.prefix(3).map { $0.chinese }.filter { !$0.isEmpty }
+        if mv.isEmpty && !bestChinese.isEmpty { mv = [bestChinese] }
+        if mv.isEmpty {
             PiPController.shared.waiting(liveActive ? "正在识别" : "等一张截图")
             return
         }
         PiPController.shared.update(
             fen: panelFen(),
-            moveChinese: "引擎: " + bestChinese,
-            fromSq: panelMap(fromSq),
-            toSq: panelMap(toSq),
-            redAtBottom: redAtBottom,
+            arrowFrom: panelMap(fromSq),
+            arrowTo: panelMap(toSq),
+            depth: depth,
+            secs: elapsed,
+            score: scoreValue,
+            moves: mv,
             hint: hint
         )
     }
