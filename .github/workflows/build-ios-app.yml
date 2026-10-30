@@ -90,6 +90,9 @@ jobs:
             if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
                  -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c "$f" -o "obj/${f%.cpp}.o"; then ok=$((ok+1)); else echo "FAILED $f"; fi
           done
+          # base/pipe.cpp 提供 PipeStruct::LineInput（ucci.cpp 要用）
+          if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
+               -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c ../base/pipe.cpp -o obj/base_pipe.o; then ok=$((ok+1)); else echo "FAILED base_pipe"; fi
           if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
                -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c ../../ee_bridge.cpp -o obj/ee_bridge.o; then ok=$((ok+1)); else echo "FAILED ee_bridge"; fi
           echo "象眼编译成功 $ok 个"
