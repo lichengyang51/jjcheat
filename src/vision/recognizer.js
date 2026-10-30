@@ -12,6 +12,12 @@
  *   四点标定顺序：[左上, 右上, 右下, 左下]
  */
 
+/** 字形采样网格边长。
+ *  16×16 对中文棋子太粗：車/馬/炮/仕 的笔画会糊在一起，
+ *  实测会出现「车认成炮、炮认成车」这种纯字形混淆。
+ *  提到 24×24（576 个采样点）后笔画结构能分辨出来。 */
+const PATCH_W = 24;
+
 const EMPTY = 0;
 const RED_PC = 1;
 const BLK_PC = 2;
@@ -974,7 +980,7 @@ class BoardRecognizer {
     // 空格的 patch 边缘是棋盘网格线（深色直线），棋子的边缘是圆形描边，
     // 两者在灰度上很像，全图等权比对会被边缘带偏。
     // 加权后由中心区域主导 —— 棋子中心是圆盘+字，空格中心是干净棋盘，差异最明显。
-    const PW = 16;
+    const PW = PATCH_W;
     this.patchWeights = (() => {
       const w = new Float32Array(PW * PW);
       let sum = 0;
@@ -1067,7 +1073,7 @@ class BoardRecognizer {
     let n = 0, sumL = 0, red = 0, dark = 0, bright = 0, warm = 0, skipped = 0;
     let ink = 0, redInk = 0, darkInk = 0;
     let coreN = 0, coreInk = 0, coreRedInk = 0, coreDarkInk = 0;
-    const PW = 16;
+    const PW = PATCH_W;
     let patchW = null, patchR = null, patchI = null, patchValid = null;
 
     // 纯绿像素过滤器（可走位置绿点、绿色高亮圈）
@@ -1136,7 +1142,7 @@ class BoardRecognizer {
           if (isDarkInk) darkInk++;
           // 中心 8x8 单独统计墨迹：高亮圈的深色描边只落在极外圈，
           // 全图统计会把它算成「黑墨」，于是刚走过的红仕被判成黑兵。
-          if (py >= 4 && py <= 11 && px >= 4 && px <= 11) {
+          if (py >= 6 && py <= 17 && px >= 6 && px <= 17) {
             coreN++;
             if (isRedInk || isDarkInk) coreInk++;
             if (isRedInk) coreRedInk++;
@@ -1535,7 +1541,11 @@ class BoardRecognizer {
         // 只比暖色/红色时，馬 的模板对任何棋子都能拿到 1.1 分以上，
         // 真正的車 反而只有 0.94，于是红俥被认成红傌（实测两格）。
         // 笔画掩码直接比字形，車 和 馬 立刻分开。
-        const score = dotW + dotR * 1.8 + dotI * (tpl.i ? 2.6 : 0);
+        // 【兵种只看笔画】
+        //   红子的盘面几乎都是同一块米黄圆片，暖色/红色两个通道对「是哪个子」毫无区分度，
+        //   把它们混进打分反而把字形淹掉：实测红俥排序第 4，输给了炮和相。
+        //   颜色已经由墨迹颜色单独判过（红/黑），这里只需要比字形。
+        const score = tpl.i ? dotI : (dotW + dotR * 0.3);
         if (score > typeBest) typeBest = score;
         if (score > best) { best = score; bestKey = key; }
       }

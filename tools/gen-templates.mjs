@@ -2,13 +2,15 @@
 /*
  * gen-templates.mjs —— 从「已知正确盘面」的真实截图生成内置棋子模板
  *
- * 为什么要把模板内置进引擎，而不是开机时学：
- *   learnBoard 的逻辑是「把第一帧当成标准开局」，用开局棋子的位置给模板贴标签。
- *   用户中途进入对局时，第一帧就是中局，标签全错 —— 车被当成马、炮被当成兵，
- *   识别出来的 FEN 永远是 rnbakabnr/9/1c5c1/...（正好是开局）。
- *   内置模板就没有这个前提，任何时刻进对局都能直接认。
+ * 为什么要内置：learnBoard 把第一帧当开局贴标签，中途进对局会全标错，
+ * 识别出来的永远是开局 FEN。内置模板没有这个前提。
  *
- * 输入：testdata/real_jjchess.bgra（开局标准盘面，589x1280）
+ * 【为什么要多个尺度、每个尺度保留实例】
+ *   同一个字在不同分辨率下栅格化结果不一样（笔画落在亚像素的位置不同）。
+ *   只用一个尺度做模板，换个尺度就「谁都不像」——
+ *   实测只用 589 宽做 24×24 模板时，700 宽的残局直接认不出来。
+ *   所以这里对 442 / 589 / 736 三种尺度各取一遍，每种棋子每种尺度单独存成一个实例。
+ *
  * 输出：src/vision/templates.js
  */
 import fs from 'node:fs';
@@ -23,6 +25,17 @@ const require = createRequire(import.meta.url);
 const REC = require(path.join(ROOT, 'src', 'vision', 'recognizer.js'));
 
 const START_FEN = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR';
+
+const SOURCES = ['real_442x959', 'real_jjchess', 's736'];
+
+const PW = 24;
+const MAX_PER_KEY = 10;
+
+const CODE_OF = {
+  K: 1, A: 2, B: 3, N: 4, R: 5, C: 6, P: 7,
+  k: 8, a: 9, b: 10, n: 11, r: 12, c: 13, p: 14
+};
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'];
 
 function loadFixture(name) {
   const base = path.join(ROOT, 'testdata', name);
@@ -43,7 +56,6 @@ function loadFixture(name) {
   return { W, H, rgba };
 }
 
-// FEN -> 每格的棋子字符
 function fenChars(fen) {
   const rows = fen.split(' ')[0].split('/');
   const out = new Array(90).fill('E');
@@ -57,120 +69,106 @@ function fenChars(fen) {
   return out;
 }
 
-const { W, H, rgba } = loadFixture('real_jjchess');
-const corners = REC.autoDetectBoard(rgba, W, H);
-if (!corners) { console.error('棋盘检测失败'); process.exit(1); }
-const dbg = REC.refineByPieces.lastDebug;
-console.log(`网格 格宽 ${dbg.cellW.toFixed(2)} 格高 ${dbg.cellH.toFixed(2)} 命中 ${dbg.hits}`);
-
-const rec = new REC.BoardRecognizer({ corners });
-// 只采 patch，不需要背景模型
-const stats = rec.sampleAll(rgba, W, H, true);
-const chars = fenChars(START_FEN);
-
-const PW = 16;
 const N = PW * PW;
 
-/**
- * 模板的 key 必须是「棋子代号数字」1..14，
- * 因为 classifyByTemplate 里是 parseInt(r.key, 10) 取兵种编码的；
- * 用 FEN 字符（K/A/B…）会 parseInt 成 NaN，整盘棋子全被判成空格。
- */
-const CODE_OF = {
-  K: 1, A: 2, B: 3, N: 4, R: 5, C: 6, P: 7,
-  k: 8, a: 9, b: 10, n: 11, r: 12, c: 13, p: 14
-};
-const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'];
-const KEY_SRC = {};   // code -> FEN char
-for (const ch in CODE_OF) KEY_SRC[CODE_OF[ch]] = ch;
-
-// 每种棋子把所有实例累加再平均（模板用「多数表决」比单实例更稳）
-const acc = {};   // code(string) -> { w: Float64Array, r: Float64Array, n: number }
-for (let sq = 0; sq < 90; sq++) {
-  const ch = chars[sq];
-  if (ch === 'E') continue;
-  const key = String(CODE_OF[ch]);
-  const s = stats[sq];
-  if (!s || !s.patchW) continue;
-  if (!acc[key]) acc[key] = { w: new Float64Array(N), r: new Float64Array(N), i: new Float64Array(N), n: 0 };
-  const a = acc[key];
-  for (let i = 0; i < N; i++) {
-    a.w[i] += s.patchW[i];
-    a.r[i] += s.patchR[i];
-    a.i[i] += s.patchI[i];
+function pack(arr) {
+  const bytes = [];
+  for (let b = 0; b < N; b += 8) {
+    let v = 0;
+    for (let j = 0; j < 8; j++) if (arr[b + j] > 127) v |= (1 << j);
+    bytes.push(v);
   }
-  a.n++;
+  return bytes;
 }
 
-const missing = KEYS.filter(k => !acc[k] || acc[k].n === 0);
-if (missing.length) { console.error('缺少这些棋子的样本: ' + missing.join(',')); process.exit(1); }
+const acc = {};
 
-console.log('\n每类样本数:');
-for (const k of KEYS) console.log(`  ${k}(${KEY_SRC[k]}): ${acc[k].n}`);
+for (const src of SOURCES) {
+  const p = path.join(ROOT, 'testdata', src + '.bgra');
+  if (!fs.existsSync(p)) { console.log('skip ' + src + ' (no file)'); continue; }
 
-// 打包：每个 key 依次 patchW(256 bit) + patchR(256 bit)，每 8 个 bit 压成 1 字节
-const bytes = [];
-for (const k of KEYS) {
-  const a = acc[k];
-  for (const ch of ['w', 'r', 'i']) {
-    const arr = a[ch];
-    for (let b = 0; b < N; b += 8) {
-      let v = 0;
-      for (let j = 0; j < 8; j++) {
-        // 半数以上实例判定为 1 就算 1
-        if (arr[b + j] / a.n >= 0.5) v |= (1 << j);
-      }
-      bytes.push(v);
-    }
+  const { W, H, rgba } = loadFixture(src);
+  const corners = REC.autoDetectBoard(rgba, W, H);
+  if (!corners) { console.log('skip ' + src + ' (no board)'); continue; }
+
+  const cellW = (corners[1][0] - corners[0][0]) / 8;
+  const rec = new REC.BoardRecognizer({ corners });
+  const stats = rec.sampleAll(rgba, W, H, true);
+  const chars = fenChars(START_FEN);
+
+  let added = 0;
+  for (let sq = 0; sq < 90; sq++) {
+    const ch = chars[sq];
+    if (ch === 'E') continue;
+    const key = String(CODE_OF[ch]);
+    const s = stats[sq];
+    if (!s || !s.patchW) continue;
+    if (!acc[key]) acc[key] = [];
+    if (acc[key].length >= MAX_PER_KEY) continue;
+    acc[key].push({ w: pack(s.patchW), r: pack(s.patchR), i: pack(s.patchI) });
+    added++;
   }
+  console.log('  ' + src + '  cellW=' + cellW.toFixed(1) + '  +' + added + ' instances');
 }
+
+const missing = KEYS.filter(k => !acc[k] || acc[k].length === 0);
+if (missing.length) {
+  console.error('missing piece types: ' + missing.join(','));
+  process.exit(1);
+}
+
+const items = [];
+for (const k of KEYS) for (const m of acc[k]) items.push({ key: k, w: m.w, r: m.r, i: m.i });
+
+const body = items.map(it =>
+  "  { key: '" + it.key + "', w: [" + it.w.join(',') + "], r: [" + it.r.join(',') + "], i: [" + it.i.join(',') + "] }"
+).join(',\n');
 
 const out = `'use strict';
 /*
  * templates.js —— 内置棋子模板（自动生成，请勿手改）
  *
- * 来源：testdata/real_jjchess（JJ象棋 标准开局盘面，589x1280）
- *       网格 格宽 ${dbg.cellW.toFixed(2)} 格高 ${dbg.cellH.toFixed(2)}
+ * 来源：${SOURCES.join(' / ')}（都是标准开局盘面，不同尺度）
  * 生成：node tools/gen-templates.mjs
  *
- * 数据格式：14 种棋子 x（16x16 暖色掩码 + 16x16 红墨掩码 + 16x16 墨迹笔画掩码），
- *           每个掩码 256 bit 按 LSB-first 打包成 32 字节。
- * 为什么内置：learnBoard 把第一帧当开局贴标签，中途进对局会全标错，
- *           识别出来的永远是开局 FEN。内置模板没有这个前提。
- * 为什么有墨迹通道：只比暖色/红色时 馬 的模板对任何棋子都能拿到 1.1 分以上，
- *           真正的車 只有 0.94，红俥会被认成红傌；笔画掩码直接比字形才分得开。
+ * 每个「棋子实例」单独存三张 ${PW}x${PW} 的二值掩码：
+ *   w = 暖色盘面   r = 红色   i = 墨迹笔画（字形本身）
+ * 共 ${items.length} 个实例。
+ *
+ * 为什么多尺度 + 保留实例：同一个字在不同分辨率下栅格化不同，
+ * 只用一个尺度的模板换个尺度就认不出；平均成一张又谁都不像。
+ * 多尺度实例逐一比对，让最接近的胜出。
  */
-var KEYS = ${JSON.stringify(KEYS)};
 var PW = ${PW};
-var DATA = [
-${(() => { const lines = []; for (let i = 0; i < bytes.length; i += 16) lines.push('  ' + bytes.slice(i, i + 16).join(', ')); return lines.join(',\n'); })()}
+var ITEMS = [
+${body}
 ];
 
-/** 解包成 BoardRecognizer 需要的 {key: [{w,r,i}]} 结构（未归一化） */
 function unpack() {
-  var out = {};
   var N = PW * PW;
-  var p = 0;
-  for (var k = 0; k < KEYS.length; k++) {
-    var key = KEYS[k];
-    var chans = {};
+  var names = ['w', 'r', 'i'];
+  var out = {};
+  for (var n = 0; n < ITEMS.length; n++) {
+    var it = ITEMS[n];
+    var ch = {};
     for (var ci = 0; ci < 3; ci++) {
       var arr = new Float32Array(N);
+      var src = it[names[ci]];
       for (var b = 0; b < N / 8; b++) {
-        var v = DATA[p++];
+        var v = src[b];
         for (var j = 0; j < 8; j++) arr[b * 8 + j] = (v >> j) & 1 ? 1 : 0;
       }
-      chans[['w', 'r', 'i'][ci]] = arr;
+      ch[names[ci]] = arr;
     }
-    out[key] = [{ w: chans.w, r: chans.r, i: chans.i }];
+    if (!out[it.key]) out[it.key] = [];
+    out[it.key].push({ w: ch.w, r: ch.r, i: ch.i });
   }
-  if (p !== DATA.length) throw new Error('模板数据长度不符: ' + p + ' != ' + DATA.length);
   return out;
 }
 
-module.exports = { KEYS: KEYS, PW: PW, DATA: DATA, unpack: unpack };
+module.exports = { PW: PW, ITEMS: ITEMS, unpack: unpack };
 `;
 
 const outPath = path.join(ROOT, 'src', 'vision', 'templates.js');
 fs.writeFileSync(outPath, out);
-console.log(`\n已写入 ${outPath}  (${bytes.length} 字节模板数据)`);
+console.log('\nwritten ' + outPath + '  (' + items.length + ' instances, ' + (out.length / 1024).toFixed(1) + ' KB)');
