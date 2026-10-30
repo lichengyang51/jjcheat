@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T04:45:56.145Z
+ *  生成时间: 2026-10-30T04:57:20.053Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -3424,6 +3424,9 @@ class BoardRecognizer {
       }
     })();
 
+    // 把每格的置信度和候选留下来，给 App 的「识别留证」页用
+    this.lastConf = Array.prototype.slice.call(conf);
+    this.lastRanked = rankedCodes.map(function (a) { return a ? a.slice(0, 3) : []; });
     return { grid, conf, codes, tplFail, repaired: repaired, hidden: hidden, hiddenCount: hiddenCount };
   }
 
@@ -4406,6 +4409,8 @@ var JJEngine = {
       out.fen = (session.lastRawFen || session.lastBoardFen) + ' ' +
         (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.recognized = 1;
+      out.conf90 = session.recognizer.lastConf || null;
+      out.tops90 = session.recognizer.lastRanked || null;
       out.engineFen = directFen;
       out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}

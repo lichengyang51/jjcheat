@@ -58,6 +58,18 @@ struct ContentView: View {
                         .foregroundColor(.black.opacity(0.8))
                         .lineLimit(2)
                     Spacer(minLength: 0)
+                    if model.pickedImage != nil && !model.evConf.isEmpty {
+                        Button {
+                            model.showEvidence = true
+                        } label: {
+                            Text("识别留证")
+                                .font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.blue.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(6)
+                        }
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -100,6 +112,17 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.showSettings) {
             SettingsView(model: model)
+        }
+        .sheet(isPresented: $model.showEvidence) {
+            if let img = model.pickedImage {
+                EvidenceView(image: img,
+                             corners: model.evCorners,
+                             imgW: model.evImgW,
+                             imgH: model.evImgH,
+                             chars: model.evChars,
+                             conf: model.evConf,
+                             tops: model.evTops)
+            }
         }
     }
 

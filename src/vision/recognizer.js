@@ -1769,6 +1769,9 @@ class BoardRecognizer {
       }
     })();
 
+    // 把每格的置信度和候选留下来，给 App 的「识别留证」页用
+    this.lastConf = Array.prototype.slice.call(conf);
+    this.lastRanked = rankedCodes.map(function (a) { return a ? a.slice(0, 3) : []; });
     return { grid, conf, codes, tplFail, repaired: repaired, hidden: hidden, hiddenCount: hiddenCount };
   }
 

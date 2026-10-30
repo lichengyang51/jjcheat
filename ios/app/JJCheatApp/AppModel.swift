@@ -57,6 +57,15 @@ final class AppModel: ObservableObject {
     @Published var pickedKind: PieceKind? = nil
     /// 用户选的那张图（显示出来，选错图能当场看见）
     @Published var pickedImage: UIImage?
+
+    // ---- 识别留证 ----
+    @Published var showEvidence = false
+    @Published var evCorners: [[Double]] = []
+    @Published var evChars: [Character] = Array(repeating: Character("."), count: 90)
+    @Published var evConf: [Double] = []
+    @Published var evTops: [[Int]] = []
+    @Published var evImgW: Int = 0
+    @Published var evImgH: Int = 0
     @Published var editMode = false
     @Published var pasteAlert = false
     @Published var pasteText = ""
@@ -127,6 +136,19 @@ final class AppModel: ObservableObject {
             }
             let fenStr = (res?["fen"] as? String) ?? ""
             let mySide = (res?["mySide"] as? String) ?? "red"
+
+            // 留证数据：四角 / 每格字符 / 置信度 / 候选
+            let conf90 = (res?["conf90"] as? [Any])?.map { ( as? Double) ?? Double(( as? Int) ?? 0) } ?? []
+            var tops90: [[Int]] = []
+            if let raw90 = res?["tops90"] as? [Any] {
+                for item in raw90 {
+                    if let arr = item as? [Any] {
+                        tops90.append(arr.map { Int(( as? Double) ?? Double(( as? Int) ?? 0)) })
+                    } else {
+                        tops90.append([])
+                    }
+                }
+            }
             DispatchQueue.main.async {
                 self.thinking = false
                 guard !fenStr.isEmpty else {
@@ -135,6 +157,16 @@ final class AppModel: ObservableObject {
                 }
                 self.setBoardFromFen(fenStr)
                 self.redAtBottom = (mySide == "red")
+                if let cornersArr = res?["corners"] as? [[Double]] {
+                    self.evCorners = cornersArr
+                } else {
+                    self.evCorners = corners
+                }
+                self.evChars = self.board.map {  ?? Character(".") }
+                self.evConf = conf90
+                self.evTops = tops90
+                self.evImgW = rgba.width
+                self.evImgH = rgba.height
                 let n = self.board.compactMap { $0 }.count
                 self.status = "识别完成 · \(n) 个子 · \(mySide == "red" ? "你执红" : "你执黑")"
                 self.compute()

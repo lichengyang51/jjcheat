@@ -753,6 +753,8 @@ var JJEngine = {
       out.fen = (session.lastRawFen || session.lastBoardFen) + ' ' +
         (mySideDetected === 'red' ? 'w' : 'b') + ' - - 0 1';
       out.recognized = 1;
+      out.conf90 = session.recognizer.lastConf || null;
+      out.tops90 = session.recognizer.lastRanked || null;
       out.engineFen = directFen;
       out.sideToMove = mySideDetected;
       try { session.tracker.pos.setFen(directFen); } catch (e) {}
