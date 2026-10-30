@@ -281,6 +281,12 @@ final class AppModel: ObservableObject {
             let cost = Date().timeIntervalSince(t0)
             DispatchQueue.main.async {
                 self.thinking = false
+                // 库着优先：这个局面已经命中云库/本地库，就别让引擎算出来的结果顶掉它
+                //（两边抢着显示就是「一直跳」）
+                if self.isBookMove && self.bookPosKey == self.posKey() {
+                    self.refreshPanel()
+                    return
+                }
                 self.elapsed = Double(JJEngine.int(res, "ms", Int(cost * 1000))) / 1000.0
                 self.depth = JJEngine.int(res, "depth", 0)
                 self.nodes = JJEngine.int(res, "nodes", 0)
@@ -298,6 +304,7 @@ final class AppModel: ObservableObject {
                 self.winratePct = JJEngine.double(res, "winrate", 50)
                 self.scoreValue = sc
                 self.isBookMove = JJEngine.int(res, "book", 0) == 1
+                if self.isBookMove { self.bookPosKey = self.posKey() } else { self.bookPosKey = "" }
 
                 var list: [CandidateRow] = []
                 if let raw = res?["rows"] as? [[String: Any]] {
@@ -322,7 +329,7 @@ final class AppModel: ObservableObject {
                    let keepIdx = list.firstIndex(where: { $0.chinese == keep }),
                    let bestScore = list.first?.score {
                     let keepScore = list[keepIdx].score
-                    if list.first?.chinese != keep && (bestScore - keepScore) < 30 {
+                    if list.first?.chinese != keep && (bestScore - keepScore) < 40 {
                         ordered = [list[keepIdx]] + list.enumerated()
                             .filter { $0.offset != keepIdx }.map { $0.element }
                     }
@@ -345,6 +352,10 @@ final class AppModel: ObservableObject {
     // MARK: - 画中画浮窗（鹏飞式小窗）
 
     private var lastCloudKey = ""
+    /// 上一帧的局面（棋盘+走子方），用来判断局面有没有变
+    private var lastPosKey = ""
+    /// 这一手库着是哪个局面下给的（局面变了就作废）
+    private var bookPosKey = ""
 
     /// 查云库（chessdb.cn）。鹏飞的开局库就是这个，背后是皮卡鱼那一档的引擎。
     /// 命中就把「库: 着法」直接顶到界面上，比本机 JS 引擎强一大截，而且不会抖。
@@ -355,17 +366,11 @@ final class AppModel: ObservableObject {
         CloudBook.shared.query(fen: fen) { [weak self] moves in
             guard let self, let first = moves.first else { return }
             DispatchQueue.main.async {
-                let info = JJEngine.shared.moveInfo(fen: fen, ucci: first)
-                let zh = (info["chinese"] as? String) ?? ""
-                guard !zh.isEmpty else { return }
-                self.isBookMove = true
-                self.bestChinese = zh
-                self.fromSq = (info["from"] as? Int) ?? -1
-                self.toSq = (info["to"] as? Int) ?? -1
-                self.scoreValue = 0
-                self.depth = 0
-                self.rows = [CandidateRow(chinese: zh, move: first, score: 0, winrate: 50, depth: 0)]
-                self.status = "云库命中 · " + zh
+                // 走同一条落地逻辑，bookPosKey 才会被写上；
+                // 不写的话下一次 compute 会拿引擎结果把这个库着顶掉 = 又跳。
+                guard self.posKey() == fen || CloudBook.bookKey(self.posKey()) == CloudBook.bookKey(fen) else { return }
+                self.applyBookMove(fen: fen, ucci: first)
+                self.status = "云库命中 · " + self.bestChinese
                 self.refreshPanel()
             }
         }
@@ -424,62 +429,71 @@ final class AppModel: ObservableObject {
     }
 
     /// 实时帧的识别结果直接推到界面和浮窗
+    /// 实时帧回来：只用来更新「局面」，不再用它的着法
+    ///
+    /// 以前这里把 process() 的着法/分数直接写进界面，可 process 内部是另一路
+    /// 浅搜（250ms），和 compute() 的 analyzeTop 结果抢着显示 ——
+    /// 两个搜索器各说各的，视觉上就是「一直跳」。
+    /// 现在：局面更新走 process，着法只认一路（云库 > analyzeTop），
+    /// 而且同一局面下已经在显示的着法不会被「略微更好」的结果顶掉。
     private func applyLive(_ res: [String: Any]) {
         let engineFen = (res["engineFen"] as? String) ?? ""
         let rawFen = (res["fen"] as? String) ?? ""
         guard !engineFen.isEmpty || !rawFen.isEmpty else { return }
-        if !engineFen.isEmpty {
-            setBoardFromFen(engineFen)
-        }
+        if !engineFen.isEmpty { setBoardFromFen(engineFen) }
         redAtBottom = ((res["mySide"] as? String) ?? "red") == "red"
         pipCells = JJEngine.int(res, "pipOverlap", 0)
 
-        // 云库：查过的局面直接给答案；没查过就发起查询（算棋照常进行，回来再顶掉）
-        if let hit = CloudBook.shared.cached(fen: engineFen), let first = hit.first {
-            let info = JJEngine.shared.moveInfo(fen: engineFen, ucci: first)
-            let zh = (info["chinese"] as? String) ?? ""
-            if !zh.isEmpty {
-                isBookMove = true
-                bestChinese = zh
-                fromSq = (info["from"] as? Int) ?? -1
-                toSq = (info["to"] as? Int) ?? -1
-                rows = [CandidateRow(chinese: zh, move: first, score: 0, winrate: 50, depth: 0)]
-                scoreValue = 0
-                depth = 0
-                status = "云库命中 · \(zh)"
-                refreshPanel()
-                return
-            }
+        let key = posKey()
+        let changed = (key != lastPosKey)
+        if changed {
+            lastPosKey = key
+            // 新局面：上一手的结论全部作废（库着、候选、显示缓存）
+            isBookMove = false
+            bookPosKey = ""
+            lastPanelMoves = []
+            bestChinese = ""
         }
-        applyCloudBook(engineFen)
 
-        let move = JJEngine.str(res, "suggestChinese", "");
-        isBookMove = false
-        if !move.isEmpty { bestChinese = move }
-        fromSq = JJEngine.int(res, "from", -1)
-        toSq = JJEngine.int(res, "to", -1)
-        let sc = JJEngine.int(res, "score", 0)
-        if sc > 29000 {
-            scoreText = "绝杀(我方赢)"
-        } else if sc < -29000 {
-            scoreText = "被绝杀(我方被将死)"
-        } else {
-            scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
+        // 云库命中：这就是最终答案，直接显示，不算棋
+        if !engineFen.isEmpty, let hit = CloudBook.shared.cached(fen: engineFen), let first = hit.first {
+            applyBookMove(fen: engineFen, ucci: first)
+            applyCloudBook(engineFen)
+            status = "云库 · \(bestChinese)"
+            refreshPanel()
+            return
         }
-        winratePct = JJEngine.double(res, "winrate", 50)
-        depth = JJEngine.int(res, "depth", 0)
-        status = "实时 · \(liveInfo) · \(redAtBottom ? "你执红" : "你执黑")"
+        if !engineFen.isEmpty { applyCloudBook(engineFen) }
 
-        // 浮窗右边要显示「深度 / 用时 / 分数 / 3 个候选着法」，
-        // 这些必须真的搜一次才有 —— process 只给一个着法。
-        // 1.2 秒最多搜一次，不然每帧都搜会把识别挤掉。
+        // 没有库着：局面变了立刻算一次；否则每 1.8 秒加深一次
         let now = Date()
-        if now.timeIntervalSince(lastLiveAnalyze) > 1.8 {
+        if changed || now.timeIntervalSince(lastLiveAnalyze) > 1.8 {
             lastLiveAnalyze = now
             compute(limitSeconds: 1.6)
         }
+        status = "实时 · \(liveInfo) · \(redAtBottom ? "你执红" : "你执黑")"
         _ = rawFen
         refreshPanel()
+    }
+
+    /// 当前局面（棋盘 + 走子方），用来判断「是不是同一个局面」
+    private func posKey() -> String {
+        fenFromBoard() + " " + (redAtBottom ? "w" : "b")
+    }
+
+    /// 把一步库着顶到界面（云库和本地库共用）
+    private func applyBookMove(fen: String, ucci: String) {
+        let info = JJEngine.shared.moveInfo(fen: fen, ucci: ucci)
+        let zh = (info["chinese"] as? String) ?? ""
+        guard !zh.isEmpty else { return }
+        isBookMove = true
+        bookPosKey = posKey()
+        bestChinese = zh
+        fromSq = (info["from"] as? Int) ?? -1
+        toSq = (info["to"] as? Int) ?? -1
+        rows = [CandidateRow(chinese: zh, move: ucci, score: 0, winrate: 50, depth: 0)]
+        scoreValue = 0
+        depth = 0
     }
 
     /// 开/关浮窗
