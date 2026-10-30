@@ -340,7 +340,10 @@ final class AppModel: ObservableObject {
         liveActive = true
         AudioKeepAlive.shared.start()
         if !PiPController.shared.isActive { toggleFloatingPanel() }
-        BroadcastPickerHolder.shared.trigger()
+        // 先让浮窗动画起来，再弹录屏面板 —— 两个系统弹窗挤在同一帧会互相打断
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            BroadcastPickerHolder.shared.trigger()
+        }
         status = "浮窗已开 · 在系统面板里点「开始直播」，浮窗会跟着棋局实时更新"
     }
 
