@@ -38,7 +38,7 @@ struct EvidenceView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("每一格左边是从你截图里裁出来的真实小图，右边是程序认成的字和候选。框红色=没把握（分数<0.5），黄色=一般，绿色=有把握。")
+                    Text("每一格左边是从你截图里裁出来的真实小图，右边是程序认成的字和候选。框红色=没把握（分数<0.45），黄色=一般，绿色=有把握（≥0.70）。")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
@@ -80,8 +80,8 @@ struct EvidenceView: View {
         let empty = (c == ".")
         let score = sq < conf.count ? conf[sq] : 0
         let frameColor: Color = empty ? Color.gray.opacity(0.25)
-            : (score >= 0.8 ? Color.green.opacity(0.8)
-               : (score >= 0.5 ? Color.yellow.opacity(0.9) : Color.red.opacity(0.9)))
+            : (score >= 0.70 ? Color.green.opacity(0.8)
+               : (score >= 0.45 ? Color.yellow.opacity(0.9) : Color.red.opacity(0.9)))
         let topNames: String = {
             guard sq < tops.count else { return "" }
             return tops[sq].compactMap { names[$0] }.joined(separator: " ")
