@@ -23,7 +23,9 @@ int main(int argc, char **argv) {
     Search.pos.nDistance = 0;
     Search.pos.PreEvaluate();
     Search.nBanMoves = 0;
-    Search.bQuit = Search.bBatch = Search.bDebug = false;
+    Search.bQuit = false;
+    Search.bBatch = true;      // 不读 stdin，只按计时停
+    Search.bDebug = false;
     Search.bUseHash = true;
     Search.bUseBook = false;
     Search.bNullMove = true;
@@ -58,7 +60,7 @@ int main(int argc, char **argv) {
     if (!tmp) { printf("tmpfile 失败\n"); return 1; }
     dup2(fileno(tmp), 1);
 
-    SearchMain(0);
+    SearchMain(LIMIT_DEPTH);
 
     fflush(stdout);
     dup2(saved, 1);

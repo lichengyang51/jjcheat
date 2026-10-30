@@ -45,7 +45,15 @@ void ee_init(void) {
     Search.pos.nDistance = 0;
     Search.pos.PreEvaluate();
     Search.nBanMoves = 0;
-    Search.bQuit = Search.bBatch = Search.bDebug = false;
+    // ★ bBatch 必须是 true ★
+    //
+    //   象眼的 Interrupt() 在 bBatch=false 时会去读 stdin（等 UCCI 命令），
+    //   在 App 里 stdin 是 /dev/null，读下去要么阻塞要么空转，
+    //   搜到一半就被判超时 → 输出 "info depth 0" + "nobestmove"（就是 rc=-2）。
+    //   bBatch=true 时它只按 nMaxTimer 计时，不碰 stdin，正好适合我们这种嵌进 App 的用法。
+    Search.bQuit = false;
+    Search.bBatch = true;
+    Search.bDebug = false;
     Search.bUseHash = true;
     Search.bUseBook = false;           // 不用它的开局库（我们有自己的）
     Search.bNullMove = true;
@@ -78,7 +86,9 @@ int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
     if (!tmp) return -4;
     dup2(fileno(tmp), 1);
 
-    SearchMain(0);
+    // 注意：nDepth 传 0 会被它当成「只做静态搜索」直接返回 nobestmove，
+    // 必须给一个真正的深度上限，靠 nMaxTimer 到点自动停。
+    SearchMain(LIMIT_DEPTH);
 
     fflush(stdout);
     dup2(saved, 1);
