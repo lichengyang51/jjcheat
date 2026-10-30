@@ -64,7 +64,9 @@ jobs:
           ls -la libpikafish.dylib
           nm -gU libpikafish.dylib | grep pf_bestmove || true
           # 网络文件放进 Resources（最终落在 .app 根目录）
-          cp pikafish.nnue ../../../JJCheatApp/Resources/pikafish.nnue
+          mkdir -p ../../../app/JJCheatApp/Resources
+          cp pikafish.nnue ../../../app/JJCheatApp/Resources/pikafish.nnue
+          ls -la ../../../app/JJCheatApp/Resources/pikafish.nnue
 
       - name: 生成 Xcode 工程
         run: |
