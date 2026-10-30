@@ -77,6 +77,13 @@ jobs:
             rm -f libeleeye.a
           fi
           nm -gU libeleeye.a 2>/dev/null | grep -E 'ee_bestmove|_ee_' | head -5 || true
+          # 开局库随包：BOOK.DAT（96KB）会落在 .app 根目录，跟可执行文件同级
+          if [ -f ../BOOK/BOOK.DAT ]; then
+            cp ../BOOK/BOOK.DAT ../../../app/JJCheatApp/Resources/BOOK.DAT
+            ls -la ../../../app/JJCheatApp/Resources/BOOK.DAT
+          else
+            echo "!! 没找到 BOOK/BOOK.DAT，开局库这次不随包"
+          fi
 
       - name: 象眼没编成时放个空库
         run: |

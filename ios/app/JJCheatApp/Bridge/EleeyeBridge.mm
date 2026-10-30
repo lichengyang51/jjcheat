@@ -9,7 +9,10 @@
 extern "C" {
 void ee_init(void);
 int  ee_bestmove(const char *fen, int movetimeMs, char *out, int outLen);
+int  ee_bestmove_ex(const char *fen, int movetimeMs, char *out, int outLen, int *isBook);
 }
+
+static BOOL g_wasBook = NO;
 
 static std::mutex g_mtx;
 static NSString *g_err = @"未尝试";
@@ -50,15 +53,21 @@ static BOOL g_ok = NO;
     char buf[32];
     buf[0] = 0;
     int rc = 0;
+    int isBook = 0;
     {
         std::lock_guard<std::mutex> lock(g_mtx);
-        rc = ee_bestmove(fen.UTF8String, ms, buf, sizeof(buf));
+        rc = ee_bestmove_ex(fen.UTF8String, ms, buf, sizeof(buf), &isBook);
     }
+    g_wasBook = (isBook != 0);
     if (rc != 0 || buf[0] == 0) {
         g_err = [NSString stringWithFormat:@"象眼算失败 rc=%d", rc];
         return nil;
     }
     return [NSString stringWithUTF8String:buf];
+}
+
++ (BOOL)lastWasBook {
+    return g_wasBook;
 }
 
 + (NSString *)lastError {

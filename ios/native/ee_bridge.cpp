@@ -30,6 +30,22 @@
 
 #if EE_OK
 
+#include <mach-o/dyld.h>
+#include <climits>
+
+// 启动最早时刻把工作目录切到 .app（开局库 BOOK.DAT 和可执行文件同级，
+// dyld 初始化顺序里我们这段 constructor(101) 比默认 65535 先跑）。
+__attribute__((constructor(101)))
+static void ee_chdir_to_bundle(void) {
+    char exe[PATH_MAX];
+    uint32_t size = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &size) != 0) return;
+    std::string p(exe);
+    const size_t pos = p.find_last_of('/');
+    if (pos == std::string::npos) return;
+    chdir(p.substr(0, pos).c_str());
+}
+
 // eleeye.cpp 里定义的常量（那个文件自带 main()，我们不编它），这里补一份
 static const int INTERRUPT_COUNT = 4096;
 
@@ -55,7 +71,11 @@ void ee_init(void) {
     Search.bBatch = true;
     Search.bDebug = false;
     Search.bUseHash = true;
-    Search.bUseBook = false;           // 不用它的开局库（我们有自己的）
+    // ★ 开局库打开 ★
+    //   BOOK.DAT 是象眼自带的开局库（96KB，几万个局面），和可执行文件同级。
+    //   命中时它直接给着法、不算棋，开局又快又稳。
+    Search.bUseBook = true;
+    strcpy(Search.szBookFile, "BOOK.DAT");
     Search.bNullMove = true;
     Search.bKnowledge = true;
     Search.bIdle = false;
@@ -66,7 +86,8 @@ void ee_init(void) {
     Search.rc4Random.InitRand();
 }
 
-int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
+int ee_bestmove_ex(const char *fen, int ms, char *out, int outLen, int *isBook) {
+    if (isBook) *isBook = 0;
     if (!fen || !out || outLen < 6) return -1;
     ee_init();
 
@@ -101,6 +122,13 @@ int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
     while ((n = fread(buf, 1, sizeof(buf), tmp)) > 0) text.append(buf, n);
     fclose(tmp);
 
+    // 库着的特征：象眼会打 "info depth 0 score N pv XXXX" 然后直接 bestmove，
+    // 没有 "info time"（那是真搜索才会打的）。据此判断这一手是不是来自开局库。
+    if (isBook && text.find("info depth 0 score") != std::string::npos
+        && text.find("info time") == std::string::npos) {
+        *isBook = 1;
+    }
+
     const size_t pos = text.rfind("bestmove");
     if (pos == std::string::npos) return -2;
     size_t p = pos + 8;
@@ -122,6 +150,10 @@ int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
     }
     snprintf(out, outLen, "%s", mv.c_str());
     return 0;
+}
+
+int ee_bestmove(const char *fen, int ms, char *out, int outLen) {
+    return ee_bestmove_ex(fen, ms, out, outLen, NULL);
 }
 
 }  // extern "C"

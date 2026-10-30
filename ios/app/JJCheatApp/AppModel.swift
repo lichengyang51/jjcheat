@@ -298,11 +298,14 @@ final class AppModel: ObservableObject {
                     NSLog("[JJCheat] 象眼给的着法不合法: %@", eeMove)
                 } else {
                 self.engineUsed = "象眼"
+                // 开局库命中：象眼直接从 BOOK.DAT 给着法（depth 0，没有 info time）
+                let fromBook = EleeyeBridge.lastWasBook()
                 let info = JJEngine.shared.moveInfo(fen: full, ucci: eeMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {
                     pfResult = [
                         "bestmove": eeMove,
+                        "book": fromBook ? 1 : 0,
                         "score": 0,
                         "depth": 0,
                         "nodes": 0,
