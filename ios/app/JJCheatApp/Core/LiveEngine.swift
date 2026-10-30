@@ -116,7 +116,7 @@ extension LiveEngine {
         }
         guard let src = srcImg,
               let ctx = CGContext(data: nil, width: tw, height: th,
-                                  bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bitsPerComponent: 8,
                                   bytesPerRow: tw * 4, space: cs,
                                   bitmapInfo: info.rawValue) else {
             return (data, width, height)
