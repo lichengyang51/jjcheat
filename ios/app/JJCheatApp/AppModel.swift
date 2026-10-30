@@ -109,6 +109,11 @@ final class AppModel: ObservableObject {
                 }
                 return
             }
+            // ★ 每张新截图都从干净状态开始
+            //   引擎里有「逐格保留上一稳定值」的机制，换一局（尤其残局只剩 4~6 子）
+            //   上一局的棋子会被当成「本帧置信度低 → 沿用上一帧」，于是凭空多出車炮。
+            //   先 reset 再识别，就不会串局。
+            JJEngine.shared.reset(fen: nil)
             JJEngine.shared.setCorners(corners)
             var res: [String: Any]?
             for _ in 0..<3 {

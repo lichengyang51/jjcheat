@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T04:18:10.268Z
+ *  生成时间: 2026-10-30T04:21:41.534Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -3870,7 +3870,7 @@ function codesLegal(codes) {
     else if (v >= 8 && v <= 14) { blkN++; cnt[1][v - 7]++; }
   }
   if (redN > 16 || blkN > 16) return false;
-  if (redN + blkN < 5) return false;
+  if (redN + blkN < 3) return false;   // 残局可能只剩 4 个子（双王+2炮）
   for (var s = 0; s < 2; s++) {
     for (var t = 1; t <= 7; t++) {
       if (cnt[s][t] > LIM[t]) return false;
@@ -3924,6 +3924,18 @@ var JJEngine = {
     session.stableCodes = null;
     session.lowStreak = null;
     session.lowConfCount = 0;
+    // 稳定判定和朝向投票也要清，否则换一局后会被上一局的哈希/投票带偏
+    session.lastCodesHash = -1;
+    session.codesStable = 0;
+    session.legalStreak = 0;
+    session.illegalStreak = 0;
+    session.orientVote = null;
+    session.orientCount = 0;
+    if (session.lastBoardFen !== undefined) session.lastBoardFen = '';
+    if (session.lastRawFen !== undefined) session.lastRawFen = '';
+    session.searchKey = '';
+    session.searchLevel = 0;
+    session.lastBudget = 0;
     return session.tracker.fen;
   },
 
