@@ -29,6 +29,32 @@
 
 using namespace Stockfish;
 
+// ★ 为什么要在「所有构造函数之前」切工作目录 ★
+//
+//   皮卡鱼的 NNUE 网络是 namespace 级全局对象，dyld 初始化阶段就会构造它，
+//   而它按相对路径 "pikafish.nnue" 去找网络文件；找不到就 std::cerr + std::exit，
+//   在 iOS 上就是「点图标闪退」。
+//   我们在自己的 .mm 里声明一个 constructor(101)（优先级比默认的 65535 高，
+//   dyld 会先跑它），把工作目录切到 .app 目录 —— 网络文件就摆在那儿，
+//   全局构造时一找就找到，启动不再崩。
+//
+//   这段必须放在 C++ 里（同一个编译单元），才能保证符号一定被链接进来。
+#include <mach-o/dyld.h>
+#include <climits>
+#include <unistd.h>
+#include <string>
+
+__attribute__((constructor(101)))
+static void jjcheat_chdir_to_bundle(void) {
+    char exe[PATH_MAX];
+    uint32_t size = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &size) != 0) return;
+    std::string p(exe);
+    const size_t pos = p.find_last_of('/');
+    if (pos == std::string::npos) return;
+    chdir(p.substr(0, pos).c_str());
+}
+
 static std::unique_ptr<Engine> g_eng;
 static std::string g_best;
 

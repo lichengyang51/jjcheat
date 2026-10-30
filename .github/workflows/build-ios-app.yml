@@ -41,8 +41,28 @@ jobs:
           cp dist/engine.js ios/app/JJCheatApp/Resources/engine.js
           ls -la ios/app/JJCheatApp/Resources/
 
-      # 皮卡鱼静态库这一步先停用：它的全局 NNUE 对象会让 App 启动即闪退，
-      # 要接必须改成运行时按需加载（见 project.yml 里的说明）。
+      # 皮卡鱼（Pikafish，Stockfish 的中国象棋版，NNUE）：编成 iOS arm64 静态库。
+      # 关键：pikafish.nnue（50MB）必须和 App 一起打包，否则引擎在 dyld 初始化
+      # 阶段找不到网络文件会直接 exit —— 那就是「点图标闪退」。
+      - name: 编译皮卡鱼 + 打包网络文件
+        run: |
+          set -e
+          mkdir -p ios/app/native
+          if [ ! -d ios/app/native/pikafish ]; then
+            git clone --depth 1 https://github.com/official-pikafish/Pikafish.git ios/app/native/pikafish
+          fi
+          cd ios/app/native/pikafish/src
+          sh ../scripts/net.sh
+          ls -la pikafish.nnue
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          make -j4 build ARCH=apple-silicon COMP=clang \
+            EXTRACXXFLAGS="-isysroot $SDK -mios-version-min=16.0 -fPIC"
+          FILES=$(find . -name '*.o')
+          xcrun libtool -static -o libpikafish.a $FILES
+          ls -la libpikafish.a
+          # 网络文件放进 App 的 Resources（会落在 .app 根目录，跟可执行文件同级）
+          cp pikafish.nnue ../../../JJCheatApp/Resources/pikafish.nnue
+          ls -la ../../../JJCheatApp/Resources/ | head
 
       - name: 生成 Xcode 工程
         run: |
