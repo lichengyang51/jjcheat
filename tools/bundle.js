@@ -135,17 +135,23 @@ function flipGrid(grid) {
   var out = new Int8Array(90);
   for (var sq = 0; sq < 90; sq++) {
     var r = (sq / 9) | 0, c = sq % 9;
-    out[(9 - r) * 9 + c] = grid[sq];
+    // ★ 必须是「旋转 180 度」，不是「上下翻转」
+    //
+    //   你执黑时，看盘的视角是从对面看过来 —— 相当于把棋盘在桌面里转了 180 度，
+    //   行和列同时反向。原来只翻了行、列没翻，得到的是一张「左右镜像」的假局面：
+    //   帅/将恰好还在九宫里（九宫左右对称），所以合法性检查也发现不了，
+    //   但整盘棋子全在错的列上，引擎算出来的着法自然全废。
+    out[(9 - r) * 9 + (8 - c)] = grid[sq];
   }
   return out;
 }
 
-/** 上下翻转一张兵种编码表 */
+/** 屏幕坐标 ↔ 引擎坐标（红在下）：旋转 180 度 */
 function flipCodes(codes) {
   var out = new Int8Array(90);
   for (var sq = 0; sq < 90; sq++) {
     var r = (sq / 9) | 0, c = sq % 9;
-    out[(9 - r) * 9 + c] = codes[sq];
+    out[(9 - r) * 9 + (8 - c)] = codes[sq];
   }
   return out;
 }
@@ -634,18 +640,45 @@ var JJEngine = {
     //   朝向就一直错着，着法自然全是乱的（浮窗还会把「你执黑」写成「你执红」）。
     //   判据：看底部两行（第 8、9 行）以哪一方棋子为主 —— 玩家自己永远在下方。
     //   只有双方数量差 ≥3 才投票，且要连续 2 帧一致才改，避免中途抖动。
-    (function detectOrientation(g) {
-      var r = 0, b = 0;
-      for (var rr = 8; rr <= 9; rr++) {
-        for (var cc = 0; cc < 9; cc++) {
-          var v = g[rr * 9 + cc];
-          if (v === 1) r++; else if (v === 2) b++;
-        }
+    (function detectOrientation(codes) {
+      // ★ 朝向改用「走不出自己半场」的棋子投票，不再数底两行的颜色
+      //
+      // 老判据是「屏幕底两行哪种颜色多，哪种就是玩家」。这在开局没问题，
+      // 但残局会直接反掉：「雨打芭蕉 编号:19」里黑方 5 个子已经压到红方底线，
+      // 底两行黑 6 红 2，于是被判成「玩家执黑」——
+      // 整盘翻面、引擎 FEN 全反，我方得分算出 -29999（自己被将死），着法全废。
+      //
+      // 帅/将出不了九宫（红帅只可能在下三行、黑将只可能在上三行），
+      // 仕/士同样只在九宫，相/象过不了河 —— 这些都是「位置锁定」的棋子，
+      // 拿它们投票，对方冲到哪都不会干扰。
+      var s = 0;
+      for (var i = 0; i < 90; i++) {
+        var c = codes[i];
+        if (!c) continue;
+        var row = (i / 9) | 0;
+        if (c === 1) s += (row >= 5 ? 6 : -6);          // 红帅在下方 → 画面正常
+        else if (c === 8) s += (row <= 4 ? 6 : -6);     // 黑将在上方 → 画面正常
+        else if (c === 2) s += (row >= 5 ? 2 : -2);     // 红仕只能在下方九宫
+        else if (c === 9) s += (row <= 4 ? 2 : -2);
+        else if (c === 3) s += (row >= 5 ? 1 : -1);     // 红相过不了河
+        else if (c === 10) s += (row <= 4 ? 1 : -1);
       }
       var vote = null;
-      if (b >= r + 3) vote = 'black';
-      else if (r >= b + 3) vote = 'red';
-      if (!vote) return;
+      if (s >= 3) vote = 'red';        // 红在下 → 我执红
+      else if (s <= -3) vote = 'black'; // 红在上 → 我执黑
+      if (!vote) {
+        // 将帅都没认出来时，退回老办法（底两行颜色），聊胜于无
+        var r2 = 0, b2 = 0;
+        for (var rr = 8; rr <= 9; rr++) {
+          for (var cc = 0; cc < 9; cc++) {
+            var code2 = codes[rr * 9 + cc];
+            if (code2 >= 1 && code2 <= 7) r2++; else if (code2 >= 8) b2++;
+          }
+        }
+        if (b2 >= r2 + 3) vote = 'black';
+        else if (r2 >= b2 + 3) vote = 'red';
+        if (!vote) return;
+      }
       if (vote === session.orientVote) {
         session.orientCount = (session.orientCount || 0) + 1;
       } else {
@@ -656,7 +689,7 @@ var JJEngine = {
         session.orientSeen = true;
         session.flipped = (vote === 'black');
       }
-    })(cls.grid);
+    })(cls.codes);
 
     var grid = session.flipped ? flipGrid(cls.grid) : cls.grid;
 

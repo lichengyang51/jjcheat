@@ -197,7 +197,15 @@ final class AppModel: ObservableObject {
                 self.nodes = JJEngine.int(res, "nodes", 0)
                 let best = JJEngine.str(res, "bestmove", "")
                 let sc = JJEngine.int(res, "score", 0)
-                self.scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
+                // 杀棋分（±30000 上下）直接写「绝杀 / 被绝杀」，
+                // 原来显示 -29999 这种数字，看着像程序坏了。
+                if sc > 29000 {
+                    self.scoreText = "绝杀(我方赢)"
+                } else if sc < -29000 {
+                    self.scoreText = "被绝杀(我方被将死)"
+                } else {
+                    self.scoreText = (sc >= 0 ? "+" : "") + "\(sc)"
+                }
                 self.winratePct = JJEngine.double(res, "winrate", 50)
 
                 var list: [CandidateRow] = []

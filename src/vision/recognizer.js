@@ -1321,9 +1321,12 @@ class BoardRecognizer {
    * @returns {number} 被修正的格子数
    */
   refineLowConfidence(stats, pixels, w, h, pts, cell, radius, gain) {
-    let fixed = 0, budget = 16;
+    let fixed = 0, budget = 18;
     const OFFS = [-1, 0, 1];
-    const SCALES = [0.94, 1.0, 1.08, 1.16];
+    // 尺度要能覆盖「这个主题的字比模板更大」的情况。
+    // 「雨打芭蕉 19」那张盘面实测：車 在 1.0 尺度下只能拿 0.427、输给卒，
+    // 拉到 1.20 立刻变 0.564 并赢下来；傌 同样在 1.20 才出头。
+    const SCALES = [0.90, 0.95, 1.05, 1.10, 1.20, 1.30];
 
     for (let sq = 0; sq < 90 && budget > 0; sq++) {
       const s = stats[sq];
@@ -1349,7 +1352,9 @@ class BoardRecognizer {
 
       budget--;
       const cx = pts[sq * 2], cy = pts[sq * 2 + 1];
-      const off = cell * 0.075;
+      // 偏移用 ±0.055 格：实测这类「棋子偏下半个字」的盘面，最佳平移就在 0.05 格附近，
+      // 用 0.075 会跨过头（跨过头之后会咬到相邻棋子的笔画）。
+      const off = cell * 0.055;
       let bestStats = s, bestScore = (m0.key === 'E') ? -2 : m0.score;
 
       // 两步走：先在同一尺度上找最佳偏移（9 次），再在最佳偏移上试尺度（4 次）。
@@ -1390,7 +1395,15 @@ class BoardRecognizer {
       // 用 0.55 当门槛会把本来能救回来的格子全部拒掉。
       // 真正防回退的是下面那条「至少高 0.12」。
       const baseScore = (m0.key === 'E') ? -2 : m0.score;
-      if (bestStats !== s && bestScore >= 0.30 && bestScore >= baseScore + 0.12) {
+      // 还要求「赢得分明」：新结果对第二名的领先要 ≥0.04，
+      // 否则说明这只是搜索空间变大后捞到的一个偶然高点，
+      // 换掉原来的判断只会把好好的格子搞坏。
+      let decisive = 1;
+      if (bestStats !== s) {
+        const mb = this.matchCell(bestStats);
+        decisive = (mb.alts && mb.alts.length > 1) ? (mb.alts[0].score - mb.alts[1].score) : 1;
+      }
+      if (bestStats !== s && bestScore >= 0.30 && bestScore >= baseScore + 0.15 && decisive >= 0.04) {
         stats[sq] = bestStats;
         fixed++;
       }

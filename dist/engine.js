@@ -1,7 +1,7 @@
 /* ============================================================
  *  JJ象棋 辅助引擎内核 —— 单文件打包
  *  目标运行环境: iOS JavaScriptCore / Node / 浏览器
- *  生成时间: 2026-10-30T05:14:35.521Z
+ *  生成时间: 2026-10-30T05:37:27.211Z
  *  模块数: 8
  * ============================================================ */
 (function (global) {
@@ -2976,9 +2976,12 @@ class BoardRecognizer {
    * @returns {number} 被修正的格子数
    */
   refineLowConfidence(stats, pixels, w, h, pts, cell, radius, gain) {
-    let fixed = 0, budget = 16;
+    let fixed = 0, budget = 18;
     const OFFS = [-1, 0, 1];
-    const SCALES = [0.94, 1.0, 1.08, 1.16];
+    // 尺度要能覆盖「这个主题的字比模板更大」的情况。
+    // 「雨打芭蕉 19」那张盘面实测：車 在 1.0 尺度下只能拿 0.427、输给卒，
+    // 拉到 1.20 立刻变 0.564 并赢下来；傌 同样在 1.20 才出头。
+    const SCALES = [0.90, 0.95, 1.05, 1.10, 1.20, 1.30];
 
     for (let sq = 0; sq < 90 && budget > 0; sq++) {
       const s = stats[sq];
@@ -3004,7 +3007,9 @@ class BoardRecognizer {
 
       budget--;
       const cx = pts[sq * 2], cy = pts[sq * 2 + 1];
-      const off = cell * 0.075;
+      // 偏移用 ±0.055 格：实测这类「棋子偏下半个字」的盘面，最佳平移就在 0.05 格附近，
+      // 用 0.075 会跨过头（跨过头之后会咬到相邻棋子的笔画）。
+      const off = cell * 0.055;
       let bestStats = s, bestScore = (m0.key === 'E') ? -2 : m0.score;
 
       // 两步走：先在同一尺度上找最佳偏移（9 次），再在最佳偏移上试尺度（4 次）。
@@ -3045,7 +3050,15 @@ class BoardRecognizer {
       // 用 0.55 当门槛会把本来能救回来的格子全部拒掉。
       // 真正防回退的是下面那条「至少高 0.12」。
       const baseScore = (m0.key === 'E') ? -2 : m0.score;
-      if (bestStats !== s && bestScore >= 0.30 && bestScore >= baseScore + 0.12) {
+      // 还要求「赢得分明」：新结果对第二名的领先要 ≥0.04，
+      // 否则说明这只是搜索空间变大后捞到的一个偶然高点，
+      // 换掉原来的判断只会把好好的格子搞坏。
+      let decisive = 1;
+      if (bestStats !== s) {
+        const mb = this.matchCell(bestStats);
+        decisive = (mb.alts && mb.alts.length > 1) ? (mb.alts[0].score - mb.alts[1].score) : 1;
+      }
+      if (bestStats !== s && bestScore >= 0.30 && bestScore >= baseScore + 0.15 && decisive >= 0.04) {
         stats[sq] = bestStats;
         fixed++;
       }
@@ -3916,17 +3929,23 @@ function flipGrid(grid) {
   var out = new Int8Array(90);
   for (var sq = 0; sq < 90; sq++) {
     var r = (sq / 9) | 0, c = sq % 9;
-    out[(9 - r) * 9 + c] = grid[sq];
+    // ★ 必须是「旋转 180 度」，不是「上下翻转」
+    //
+    //   你执黑时，看盘的视角是从对面看过来 —— 相当于把棋盘在桌面里转了 180 度，
+    //   行和列同时反向。原来只翻了行、列没翻，得到的是一张「左右镜像」的假局面：
+    //   帅/将恰好还在九宫里（九宫左右对称），所以合法性检查也发现不了，
+    //   但整盘棋子全在错的列上，引擎算出来的着法自然全废。
+    out[(9 - r) * 9 + (8 - c)] = grid[sq];
   }
   return out;
 }
 
-/** 上下翻转一张兵种编码表 */
+/** 屏幕坐标 ↔ 引擎坐标（红在下）：旋转 180 度 */
 function flipCodes(codes) {
   var out = new Int8Array(90);
   for (var sq = 0; sq < 90; sq++) {
     var r = (sq / 9) | 0, c = sq % 9;
-    out[(9 - r) * 9 + c] = codes[sq];
+    out[(9 - r) * 9 + (8 - c)] = codes[sq];
   }
   return out;
 }
@@ -4415,18 +4434,45 @@ var JJEngine = {
     //   朝向就一直错着，着法自然全是乱的（浮窗还会把「你执黑」写成「你执红」）。
     //   判据：看底部两行（第 8、9 行）以哪一方棋子为主 —— 玩家自己永远在下方。
     //   只有双方数量差 ≥3 才投票，且要连续 2 帧一致才改，避免中途抖动。
-    (function detectOrientation(g) {
-      var r = 0, b = 0;
-      for (var rr = 8; rr <= 9; rr++) {
-        for (var cc = 0; cc < 9; cc++) {
-          var v = g[rr * 9 + cc];
-          if (v === 1) r++; else if (v === 2) b++;
-        }
+    (function detectOrientation(codes) {
+      // ★ 朝向改用「走不出自己半场」的棋子投票，不再数底两行的颜色
+      //
+      // 老判据是「屏幕底两行哪种颜色多，哪种就是玩家」。这在开局没问题，
+      // 但残局会直接反掉：「雨打芭蕉 编号:19」里黑方 5 个子已经压到红方底线，
+      // 底两行黑 6 红 2，于是被判成「玩家执黑」——
+      // 整盘翻面、引擎 FEN 全反，我方得分算出 -29999（自己被将死），着法全废。
+      //
+      // 帅/将出不了九宫（红帅只可能在下三行、黑将只可能在上三行），
+      // 仕/士同样只在九宫，相/象过不了河 —— 这些都是「位置锁定」的棋子，
+      // 拿它们投票，对方冲到哪都不会干扰。
+      var s = 0;
+      for (var i = 0; i < 90; i++) {
+        var c = codes[i];
+        if (!c) continue;
+        var row = (i / 9) | 0;
+        if (c === 1) s += (row >= 5 ? 6 : -6);          // 红帅在下方 → 画面正常
+        else if (c === 8) s += (row <= 4 ? 6 : -6);     // 黑将在上方 → 画面正常
+        else if (c === 2) s += (row >= 5 ? 2 : -2);     // 红仕只能在下方九宫
+        else if (c === 9) s += (row <= 4 ? 2 : -2);
+        else if (c === 3) s += (row >= 5 ? 1 : -1);     // 红相过不了河
+        else if (c === 10) s += (row <= 4 ? 1 : -1);
       }
       var vote = null;
-      if (b >= r + 3) vote = 'black';
-      else if (r >= b + 3) vote = 'red';
-      if (!vote) return;
+      if (s >= 3) vote = 'red';        // 红在下 → 我执红
+      else if (s <= -3) vote = 'black'; // 红在上 → 我执黑
+      if (!vote) {
+        // 将帅都没认出来时，退回老办法（底两行颜色），聊胜于无
+        var r2 = 0, b2 = 0;
+        for (var rr = 8; rr <= 9; rr++) {
+          for (var cc = 0; cc < 9; cc++) {
+            var code2 = codes[rr * 9 + cc];
+            if (code2 >= 1 && code2 <= 7) r2++; else if (code2 >= 8) b2++;
+          }
+        }
+        if (b2 >= r2 + 3) vote = 'black';
+        else if (r2 >= b2 + 3) vote = 'red';
+        if (!vote) return;
+      }
       if (vote === session.orientVote) {
         session.orientCount = (session.orientCount || 0) + 1;
       } else {
@@ -4437,7 +4483,7 @@ var JJEngine = {
         session.orientSeen = true;
         session.flipped = (vote === 'black');
       }
-    })(cls.grid);
+    })(cls.codes);
 
     var grid = session.flipped ? flipGrid(cls.grid) : cls.grid;
 

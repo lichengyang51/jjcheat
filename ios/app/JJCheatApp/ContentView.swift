@@ -329,7 +329,8 @@ struct ContentView: View {
                             } label: {
                                 HStack {
                                     Text(row.chinese).frame(width: 74, alignment: .leading)
-                                    Text("\(row.score)").frame(width: 46, alignment: .leading)
+                                    Text(row.score > 29000 ? "绝杀" : (row.score < -29000 ? "被杀" : "\(row.score)"))
+                                        .frame(width: 46, alignment: .leading)
                                     Text(String(format: "%.4f", row.winrate / 100))
                                         .frame(width: 56, alignment: .leading)
                                     Text(idx == 0 ? "最佳" : "").frame(maxWidth: .infinity, alignment: .leading)
