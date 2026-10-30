@@ -670,7 +670,7 @@ function refineByPieces(pixels, w, h, corners) {
     if (ratio < 0.55 || ratio > 1.80) return;
     const rr = Math.min(cw, ch) * 0.30;
     const r = gridAlignScore(integ, iw, w, h, x0, cw, y0, ch, rr, null);
-    if (r.hits < 6) return;
+    if (r.hits < 2) return;   // 残局只有 6 个子，门槛必须放低
     if (r.usable < 40) return;
     const cand = { x0: x0, cw: cw, y0: y0, ch: ch, hits: r.hits, score: r.score, tag: tag, dev: devOf(x0, cw, y0, ch) };
     if (!best || r.hits > best.hits || (r.hits === best.hits && r.score > best.score)) best = cand;
@@ -699,9 +699,9 @@ function refineByPieces(pixels, w, h, corners) {
     // 有遮挡时能参与打分的点变少，搜索会被浮窗边缘的高光带偏，就该退回先验。
     const bx0 = sd.x0 - sd.cw * 0.5, bx1 = sd.x0 + sd.cw * 8.5;
     const by0 = sd.y0 - sd.ch * 0.5, by1 = sd.y0 + sd.ch * 9.5;
-    const occluded = !!(skipRect && skipRect.x1 >= bx0 && skipRect.x0 <= bx1
+    const occluded_unused = !!(skipRect && skipRect.x1 >= bx0 && skipRect.x0 <= bx1
       && skipRect.y1 >= by0 && skipRect.y0 <= by1);
-    if (occluded && base.hits >= 16 && base.usable >= 40) {
+    if (base.hits >= 3 && base.usable >= 40) {
       let pick = { x0: sd.x0, cw: sd.cw, y0: sd.y0, ch: sd.ch, hits: base.hits, score: base.score, dev: 0, tag: 'prior-fixed' };
       const oS = 0.02, sS = 0.004;
       for (let i = -1; i <= 1; i++) {
@@ -802,7 +802,7 @@ function refineByPieces(pixels, w, h, corners) {
 
   if (!best) return null;
   // 命中太少说明不是对局画面（比如停在菜单/结算界面），宁可报失败
-  if (best.hits < 8) return null;
+  if (best.hits < 3) return null;   // 残局可能只有 5~6 个子
 
   refineByPieces.lastDebug = {
     cellW: best.cw, cellH: best.ch, ratio: best.cw / best.ch,
