@@ -68,6 +68,44 @@ jobs:
           cp pikafish.nnue ../../../app/JJCheatApp/Resources/pikafish.nnue
           ls -la ../../../app/JJCheatApp/Resources/pikafish.nnue
 
+      # 象眼（ElephantEye）：纯 C++ 经典引擎，不依赖数据文件，静态链接最稳。
+      - name: 编译象眼静态库
+        continue-on-error: true
+        run: |
+          set -e
+          mkdir -p ios/native
+          if [ ! -d ios/native/eleeye ]; then
+            git clone --depth 1 https://github.com/xqbase/eleeye.git ios/native/eleeye
+          fi
+          # 源码注释是 GBK，clang 按 UTF-8 读会报错 —— 先转码
+          find ios/native/eleeye -name '*.cpp' -o -name '*.h' | while read f; do
+            iconv -f GBK -t UTF-8 "$f" > "$f.u8" 2>/dev/null && mv "$f.u8" "$f" || rm -f "$f.u8"
+          done
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          cd ios/native/eleeye/eleeye
+          mkdir -p obj
+          ok=0
+          for f in *.cpp; do
+            [ "$f" = "eleeye.cpp" ] && continue   # 它自带 main()，不要
+            if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
+                 -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c "$f" -o "obj/${f%.cpp}.o"; then ok=$((ok+1)); else echo "FAILED $f"; fi
+          done
+          if xcrun --sdk iphoneos clang++ -arch arm64 -isysroot "$SDK" -mios-version-min=16.0 \
+               -std=c++11 -O2 -fPIC -DNDEBUG -I. -I../base -c ../../ee_bridge.cpp -o obj/ee_bridge.o; then ok=$((ok+1)); else echo "FAILED ee_bridge"; fi
+          echo "象眼编译成功 $ok 个"
+          xcrun libtool -static -o libeleeye.a obj/*.o || true
+          ls -la libeleeye.a || echo "没生成静态库"
+
+      - name: 象眼没编成时放个空库
+        run: |
+          LIB=ios/native/eleeye/eleeye/libeleeye.a
+          if [ ! -f "$LIB" ]; then
+            echo "象眼没编成，放空库"
+            mkdir -p "$(dirname "$LIB")"
+            xcrun libtool -static -o "$LIB" /dev/null 2>/dev/null || ar rcs "$LIB"
+          fi
+          ls -la "$LIB"
+
       - name: 生成 Xcode 工程
         run: |
           cd ios/app

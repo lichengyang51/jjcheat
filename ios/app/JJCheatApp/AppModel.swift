@@ -283,24 +283,24 @@ final class AppModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            // ★ 皮卡鱼优先：它比本机 JS 引擎高一千多分
+            // ★ 引擎优先级：象眼（纯 C++，最稳）→ 皮卡鱼（dylib，若加载成功）→ 本机 JS
             var pfResult: [String: Any]? = nil
-            if PikafishBridge.available(),
-               let pfMove = PikafishBridge.bestMove(full, movetimeMs: Int32(ms)) {
-                guard JJEngine.shared.isLegalMove(fen: full, ucci: pfMove) else {
+            if EleeyeBridge.available(),
+               let eeMove = EleeyeBridge.bestMove(full, movetimeMs: Int32(ms)) {
+                guard JJEngine.shared.isLegalMove(fen: full, ucci: eeMove) else {
                     return
                 }
-                let info = JJEngine.shared.moveInfo(fen: full, ucci: pfMove)
+                let info = JJEngine.shared.moveInfo(fen: full, ucci: eeMove)
                 let zh = (info["chinese"] as? String) ?? ""
                 if !zh.isEmpty {
                     pfResult = [
-                        "bestmove": pfMove,
+                        "bestmove": eeMove,
                         "score": 0,
                         "depth": 0,
                         "nodes": 0,
                         "ms": ms,
                         "rows": [[
-                            "move": pfMove, "chinese": zh, "score": 0,
+                            "move": eeMove, "chinese": zh, "score": 0,
                             "winrate": 0.5, "depth": 0
                         ]]
                     ]
@@ -442,11 +442,17 @@ final class AppModel: ObservableObject {
         liveActive = true
         // 皮卡鱼探活放后台：首次要初始化 NNUE 网络，会卡一两秒
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let ok = PikafishBridge.available()
-            let msg = PikafishBridge.lastError()
+            let eeOK = EleeyeBridge.available()
+            let eeMsg = EleeyeBridge.lastError()
+            let pfOK = PikafishBridge.available()
+            let pfMsg = PikafishBridge.lastError()
             DispatchQueue.main.async {
-                self?.hasPikafish = ok
-                self?.engineStatus = ok ? "皮卡鱼已就绪" : ("皮卡鱼不可用：" + msg)
+                self?.hasPikafish = eeOK || pfOK
+                if eeOK {
+                    self?.engineStatus = "象眼已就绪" + (pfOK ? "（皮卡鱼也已加载）" : "")
+                } else {
+                    self?.engineStatus = "象眼不可用：" + eeMsg + " · 皮卡鱼：" + pfMsg
+                }
             }
         }
         AudioKeepAlive.shared.start()
