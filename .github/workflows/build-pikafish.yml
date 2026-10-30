@@ -18,37 +18,36 @@ jobs:
         with:
           xcode-version: '16'
 
-      - name: 克隆皮卡鱼 + 下网络文件
+      - name: 克隆皮卡鱼
         run: |
-          set -e
           git clone --depth 1 https://github.com/official-pikafish/Pikafish.git pf
-          cd pf
-          echo "--- 目录 ---"
-          ls
-          echo "--- scripts ---"
-          ls scripts || true
-          echo "--- 下载网络文件 ---"
-          cd src
-          sh ../scripts/net.sh || true
-          ls -la *.nnue 2>/dev/null || echo "源码目录没有 nnue"
+          ls pf
+          ls pf/scripts
 
-      - name: 试编译（先把报错打出来）
+      - name: 下网络文件
+        run: |
+          cd pf/src
+          sh ../scripts/net.sh || true
+          ls -la *.nnue || true
+
+      - name: 用官方 Makefile 编（iOS arm64）
         run: |
           set -x
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
           cd pf/src
-          CXX="clang++ -arch arm64 -isysroot $SDK -mios-version-min=16.0 -std=c++17 -O2 -fPIC -DNDEBUG"
-          mkdir -p obj_ios
-          ok=0; fail=0
-          for f in *.cpp nnue/*.cpp; do
-            o="obj_ios/$(echo $f | tr '/' '_' | sed 's/\.cpp$/.o/')"
-            if $CXX -I. -c "$f" -o "$o"; then ok=$((ok+1)); else fail=$((fail+1)); echo "FAILED: $f"; fi
-          done
-          echo "编译成功 $ok 个，失败 $fail 个"
-          xcrun libtool -static -o libpikafish.a obj_ios/*.o 2>&1 | tail -3 || true
-          ls -la libpikafish.a 2>/dev/null || echo "静态库没生成"
+          make -j4 build ARCH=armv8 COMP=clang \
+            EXTRACXXFLAGS="-arch arm64 -isysroot $SDK -mios-version-min=16.0 -fPIC -DIS_64BIT" \
+            2>&1 | tail -40
+          set +x
+          echo "=== 目标文件 ==="
+          find . -name '*.o' | head -20
+          echo "=== 归档 ==="
+          FILES=$(find . -name '*.o')
+          if [ -n "$FILES" ]; then xcrun libtool -static -o libpikafish.a $FILES; fi
+          ls -la libpikafish.a || echo "没有静态库"
 
-      - name: 上传（哪怕只有部分成功）
+      - name: 上传
         if: always()
         uses: actions/upload-artifact@v4
         with:
